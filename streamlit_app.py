@@ -32,7 +32,7 @@ os.chdir(APP_DIR)  # notebook dùng PROJECT_DIR = Path.cwd(); trọng số ở r
 GIAY_VIDEO_TOI_DA = 30   # máy chủ miễn phí chỉ có CPU yếu nên giới hạn độ dài video
 CANH_TOI_DA = 960        # thu nhỏ khung hình video lớn hơn mức này
 SO_ANH_CANH_BAO_TOI_DA = 12
-COT_CONG_NHAN = ["CN", "Mũ", "Găng", "Áo", "Giày", "Tay", "Kết luận"]
+COT_CONG_NHAN = ["CN", "Mũ", "Găng", "Áo", "Giày", "Kết luận"]
 COT_NHAT_KY = ["Thời gian", "Nguồn", "Thời điểm (s)", "Công nhân", "Vi phạm", "Ảnh cảnh báo"]
 
 st.set_page_config(page_title="Giám sát an toàn công trường", page_icon="⛑️", layout="wide")
@@ -86,17 +86,22 @@ def bang_cong_nhan(report):
     for w in report["workers"]:
         thieu = {name for name, _ in w["thieu"]}
         dau = ["✘" if name in thieu else "✔" for name, _, _, _ in core.PPE_RULES]
-        dau.append("✘" if any(name in thieu for name, _ in core.EXTRA_VIOLATIONS.values()) else "✔")
-        rows.append([f"#{w['id']}", *dau, "Đạt" if w["dat_chuan"] else "Vi phạm"])
+        if w["dat_chuan"]:
+            ket_luan = "Đạt"
+        elif "✘" in dau:
+            ket_luan = "Vi phạm"
+        else:  # đủ 4 trang bị nhưng vẫn vi phạm, ví dụ để tay trần
+            ket_luan = f"Vi phạm ({', '.join(name.lower() for name in thieu)})"
+        rows.append([f"#{w['id']}", *dau, ket_luan])
     for d in report["orphan_violations"]:
-        rows.append(["?", "", "", "", "", "", f"{d['label']} (chưa gắn được công nhân)"])
+        rows.append(["?", "", "", "", "", f"{d['label']} (chưa gắn được công nhân)"])
     return pd.DataFrame(rows, columns=COT_CONG_NHAN)
 
 
 def to_mau_bang(df):
     """Tô chữ đỏ cho ô ✘ / Vi phạm, xanh cho ô ✔ / Đạt."""
     def mau(v):
-        if v in ("✘", "Vi phạm"):
+        if v == "✘" or str(v).startswith("Vi phạm"):
             return "color:#dc2626;font-weight:600"
         if v in ("✔", "Đạt"):
             return "color:#16a34a"
@@ -443,7 +448,7 @@ with st.sidebar:
     st.markdown("**Cách đọc kết quả**\n\n"
                 "- Khung **xanh**: công nhân đủ 4 trang bị\n"
                 "- Khung **đỏ**: thiếu trang bị (ghi rõ món thiếu)\n"
-                "- Bảng: ✔ có · ✘ thiếu · *Tay ✘* = để tay trần")
+                "- Bảng: ✔ có · ✘ thiếu trang bị")
     st.caption("Mô hình YOLOv11n tinh chỉnh trên bộ dữ liệu PPE (Roboflow, CC BY 4.0). "
                "Không có lớp *no-gloves* nên thiếu găng tay được suy ra từ việc không phát hiện găng tay. "
                "Ảnh và video chỉ được xử lý tạm thời, không lưu lại.")
