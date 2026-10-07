@@ -6,21 +6,25 @@ từ notebook_code.py, giống bản desktop giao_dien.py.
 Chạy thử trên máy (từ thư mục dự án):
     .venv\\Scripts\\streamlit.exe run streamlit_app\\streamlit_app.py
 """
+import base64
 import csv
 import io
 import os
 import subprocess
 import tempfile
 import threading
+import time
 import types
 from datetime import datetime
 from pathlib import Path
 
+import av
 import cv2
 import imageio_ffmpeg
 import numpy as np
 import pandas as pd
 import streamlit as st
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 APP_DIR = Path(__file__).resolve().parent
 os.chdir(APP_DIR)  # notebook dùng PROJECT_DIR = Path.cwd(); trọng số ở runs/detect/train/weights/best.pt
@@ -157,11 +161,34 @@ def hien_thi_ket_qua_anh(ten, du_lieu, conf, khoa, xep_doc=False):
 
 
 # ---------------------------------------------------------------------- video
-def sang_h264(nguon, dich):
+def sang_h264(nguon, dich, preset="veryfast"):
     """Trình duyệt không phát được mp4v của OpenCV, nên chuyển sang H.264 bằng ffmpeg."""
     subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(nguon),
-                    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p", "-an",
                     "-movflags", "+faststart", str(dich)], check=True)
+
+
+MA_HOA_TRINH_DUYET = {"avc1", "h264", "x264", "vp80", "vp90", "vp09", "av01"}
+
+
+@st.cache_data(max_entries=4, show_spinner="Đang chuẩn bị bản xem trước của video gốc…")
+def ban_xem_truoc(file_id, duoi, _du_lieu):
+    """Video gốc để xem trên trình duyệt. Trình duyệt chỉ phát được H.264/VP8/VP9/AV1, nên video khác
+    (mp4v, .avi, .mkv, HEVC của iPhone…) được chuyển sang H.264. Nhớ theo file_id để không chuyển lại."""
+    thu_muc = Path(tempfile.mkdtemp())
+    vao = thu_muc / f"goc{duoi}"
+    vao.write_bytes(_du_lieu)
+    cap = cv2.VideoCapture(str(vao))
+    ma_hoa = int(cap.get(cv2.CAP_PROP_FOURCC)).to_bytes(4, "little").decode("ascii", "ignore").lower()
+    cap.release()
+    if duoi in (".mp4", ".mov", ".m4v", ".webm") and ma_hoa in MA_HOA_TRINH_DUYET:
+        return _du_lieu
+    ra = thu_muc / "xem_truoc.mp4"
+    try:
+        sang_h264(vao, ra, preset="ultrafast")
+    except subprocess.CalledProcessError:
+        return _du_lieu  # để trình duyệt tự thử
+    return ra.read_bytes()
 
 
 def phan_tich_video(du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
@@ -222,6 +249,173 @@ def phan_tich_video(du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
             "fps": fps, "so_lan_chay": so_lan_chay, "canh_bao": canh_bao, "rows": rows}
 
 
+# ---------------------------------------------------------------------- camera trực tiếp
+class GiamSatCamera:
+    """Trạng thái giám sát camera của một phiên, dùng chung cho chế độ A (WebRTC) và B (tự chụp).
+    Chế độ A gọi xu_ly_khung_webrtc từ luồng riêng của streamlit-webrtc, nên mọi truy cập đều qua self.khoa."""
+
+    def __init__(self):
+        self.khoa = threading.Lock()
+        self.conf, self.chu_ky, self.tan_suat = 0.3, 3, 4
+        self.report, self.jpg_ket_qua = None, None
+        self.lan_chay_cuoi, self.canh_bao_cuoi, self.ms_phan_tich = 0.0, float("-inf"), 0.0
+        self.so_khung, self.so_khung_vp = 0, 0
+        self.nhat_ky, self.anh_canh_bao = [], []
+
+    def ghi_nhan(self, report, annotated, nguon, ms):
+        """Cập nhật kết quả mới nhất; ghi cảnh báo tối đa một lần mỗi `chu_ky` giây (giống notebook)."""
+        now = time.time()
+        with self.khoa:
+            self.report, self.ms_phan_tich = report, ms
+            self.so_khung += 1
+            self.so_khung_vp += report["canh_bao"]
+            if report["canh_bao"] and now - self.canh_bao_cuoi >= self.chu_ky:
+                self.canh_bao_cuoi = now
+                self.nhat_ky = dong_nhat_ky(nguon, "", report, f"camera_{datetime.now():%Y%m%d_%H%M%S}.jpg") + self.nhat_ky
+                jpg = cv2.imencode(".jpg", gioi_han_kich_thuoc(annotated, 480))[1].tobytes()
+                self.anh_canh_bao.insert(0, (jpg, f"{datetime.now():%H:%M:%S} · {core.mo_ta_vi_pham(report)}"))
+                del self.anh_canh_bao[8:]
+
+    def phan_tich_khung(self, bgr, nguon):
+        t0 = time.perf_counter()
+        report, annotated = phan_tich(bgr, self.conf)
+        self.ghi_nhan(report, annotated, nguon, (time.perf_counter() - t0) * 1000)
+        return report, annotated
+
+    def xu_ly_khung_webrtc(self, frame):
+        """Chế độ A: chỉ chạy mô hình `tan_suat` lần mỗi giây, các khung ở giữa vẽ lại kết quả gần nhất."""
+        bgr = gioi_han_kich_thuoc(frame.to_ndarray(format="bgr24"), 640)
+        now = time.monotonic()
+        if self.report is None or now - self.lan_chay_cuoi >= 1 / self.tan_suat:
+            self.lan_chay_cuoi = now
+            _, annotated = self.phan_tich_khung(bgr, "camera (trực tiếp)")
+        else:
+            with self.khoa:
+                report = self.report
+            annotated = core.ve_ket_qua(bgr, report)
+        return av.VideoFrame.from_ndarray(annotated, format="bgr24")
+
+    def xoa(self):
+        with self.khoa:
+            self.report, self.jpg_ket_qua = None, None
+            self.so_khung, self.so_khung_vp, self.canh_bao_cuoi = 0, 0, float("-inf")
+            self.nhat_ky, self.anh_canh_bao = [], []
+
+
+def hien_thi_trang_thai_camera(gs):
+    with gs.khoa:
+        report, ms, so, vp = gs.report, gs.ms_phan_tich, gs.so_khung, gs.so_khung_vp
+        nhat_ky, anh_cb = list(gs.nhat_ky), list(gs.anh_canh_bao)
+    if report is None:
+        st.info("Đang chờ khung hình đầu tiên…")
+        return
+    the_tu_bao_cao(report)
+    st.dataframe(to_mau_bang(bang_cong_nhan(report)), hide_index=True, width="stretch")
+    st.caption(f"Đã phân tích {so} khung hình · {vp} có vi phạm ({vp / so:.0%}) · "
+               f"{len(anh_cb)} lần cảnh báo gần đây · {ms:.0f} ms / lần phân tích")
+    if anh_cb:
+        st.image(anh_cb[0][0], caption=f"Cảnh báo gần nhất: {anh_cb[0][1]}", width="stretch")
+    if nhat_ky:
+        st.dataframe(pd.DataFrame(nhat_ky[:30], columns=COT_NHAT_KY), hide_index=True, width="stretch", height=220)
+        st.download_button("⬇ Tải nhật ký CSV", csv_nhat_ky(nhat_ky), "camera_nhat_ky.csv", "text/csv",
+                           key="csv_camera", width="stretch")
+
+
+@st.fragment(run_every=1.0)
+def bang_trang_thai_truc_tiep(gs):
+    """Chế độ A: luồng WebRTC chạy ngầm, bảng trạng thái tự làm mới mỗi giây."""
+    hien_thi_trang_thai_camera(gs)
+
+
+def may_chu_ice():
+    """STUN miễn phí của Google; nếu mạng chặn, thêm máy chủ TURN vào Secrets của Streamlit (khóa ice_servers)."""
+    try:
+        tu_secrets = st.secrets.get("ice_servers")
+    except Exception:  # chưa có file secrets
+        tu_secrets = None
+    if tu_secrets:
+        return [dict(s) for s in tu_secrets]
+    return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
+
+
+CAMERA_TU_CHUP_HTML = """
+<div class="khung"><video autoplay playsinline muted></video></div>
+<div class="trang-thai">Đang xin quyền dùng camera…</div>
+"""
+CAMERA_TU_CHUP_CSS = """
+.khung {border-radius: 10px; overflow: hidden; background: #0b0f15; line-height: 0}
+video {width: 100%; max-height: 360px; object-fit: contain}
+.trang-thai {font-size: .85rem; opacity: .75; margin-top: 6px}
+"""
+CAMERA_TU_CHUP_JS = """
+export default function(component) {
+    const { data, setTriggerValue, parentElement } = component;
+    const video = parentElement.querySelector('video');
+    const trangThai = parentElement.querySelector('.trang-thai');
+    const canvas = document.createElement('canvas');
+    const chuKy = (data && data.chu_ky_ms) || 1000;
+    let stream = null, timer = null, daDung = false;
+
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+        .then((s) => {
+            if (daDung) { s.getTracks().forEach((t) => t.stop()); return; }
+            stream = s;
+            video.srcObject = s;
+            trangThai.textContent = `● Đang tự chụp và gửi lên máy chủ mỗi ${chuKy / 1000} giây`;
+            timer = setInterval(() => {
+                if (!video.videoWidth || document.hidden) return;
+                const tiLe = Math.min(1, 640 / video.videoWidth);
+                canvas.width = Math.round(video.videoWidth * tiLe);
+                canvas.height = Math.round(video.videoHeight * tiLe);
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                setTriggerValue('frame', canvas.toDataURL('image/jpeg', 0.8));
+            }, chuKy);
+        })
+        .catch((err) => { trangThai.textContent = 'Không mở được camera: ' + err.message; });
+
+    return () => {
+        daDung = true;
+        clearInterval(timer);
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+}
+"""
+
+
+@st.cache_resource
+def tao_camera_tu_chup():
+    return st.components.v2.component("camera_tu_chup", html=CAMERA_TU_CHUP_HTML, css=CAMERA_TU_CHUP_CSS,
+                                      js=CAMERA_TU_CHUP_JS)
+
+
+@st.fragment
+def che_do_tu_chup(gs):
+    """Chế độ B: trình duyệt tự chụp webcam mỗi giây và gửi lên qua kết nối web thường (không cần WebRTC).
+    Đặt trong fragment để mỗi ảnh gửi lên chỉ chạy lại phần này, không chạy lại cả trang."""
+    trai, phai = st.columns([1, 1], gap="medium")
+    with trai:
+        kq = tao_camera_tu_chup()(key="camera_tu_chup", data={"chu_ky_ms": 1000}, on_frame_change=lambda: None)
+        anh = getattr(kq, "frame", None)
+        if anh:
+            bgr = cv2.imdecode(np.frombuffer(base64.b64decode(anh.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+            if bgr is not None:
+                _, annotated = gs.phan_tich_khung(bgr, "camera (tự chụp)")
+                gs.jpg_ket_qua = cv2.imencode(".jpg", annotated)[1].tobytes()
+        if gs.jpg_ket_qua:
+            st.image(gs.jpg_ket_qua, caption="Kết quả phân tích gần nhất", width="stretch")
+    with phai:
+        hien_thi_trang_thai_camera(gs)
+
+
+DICH_WEBRTC = {
+    "start": "▶ Bắt đầu giám sát", "stop": "■ Dừng", "select_device": "Chọn camera",
+    "media_api_not_available": "Trình duyệt không hỗ trợ camera", "device_ask_permission": "Hãy cho phép trang dùng camera",
+    "device_not_available": "Không tìm thấy camera", "device_access_denied": "Quyền dùng camera đã bị chặn",
+    "turn_camera_on": "Bật camera", "turn_camera_off": "Tắt camera", "mute_microphone": "Tắt micro",
+    "unmute_microphone": "Bật micro", "select_camera": "Chọn camera", "select_microphone": "Chọn micro",
+}
+
+
 # ---------------------------------------------------------------------- giao diện
 st.markdown("""
 <style>
@@ -275,23 +469,35 @@ with tab_anh:
                 hien_thi_ket_qua_anh(ten, du_lieu, conf, f"a{i}")
 
 with tab_video:
-    tep_video = st.file_uploader("Chọn video công trường", type=["mp4", "avi", "mov", "mkv"])
+    tep_video = st.file_uploader("Chọn video công trường từ máy tính", type=["mp4", "avi", "mov", "mkv"])
     st.caption(f"Máy chủ miễn phí chỉ có CPU nên chỉ phân tích **{GIAY_VIDEO_TOI_DA} giây đầu** của video. "
                "Video 30 giây mất khoảng 1–3 phút.")
-    if tep_video is not None and st.button("▶ Phân tích video", type="primary"):
-        thanh = st.progress(0.0, text="Đang chuẩn bị…")
-        kq = phan_tich_video(tep_video.getvalue(), tep_video.name, conf, chu_ky, khung_moi_giay, thanh)
-        thanh.empty()
-        st.session_state["video_kq"] = kq
-        if kq is None:
-            st.error("Không đọc được video. Hãy thử file .mp4 khác.")
+    if tep_video is not None:
+        if st.button("▶ Phân tích video", type="primary"):
+            thanh = st.progress(0.0, text="Đang chuẩn bị…")
+            kq = phan_tich_video(tep_video.getvalue(), tep_video.name, conf, chu_ky, khung_moi_giay, thanh)
+            thanh.empty()
+            if kq is None:
+                st.error("Không đọc được video. Hãy thử file .mp4 khác.")
+            else:
+                kq["file_id"] = tep_video.file_id
+            st.session_state["video_kq"] = kq
 
-    kq = st.session_state.get("video_kq")
-    if kq and tep_video is not None and kq["ten"] == tep_video.name:
-        trai, phai = st.columns([3, 2], gap="medium")
-        with trai:
-            st.video(kq["video"])
-        with phai:
+        kq = st.session_state.get("video_kq")
+        if not kq or kq.get("file_id") != tep_video.file_id:
+            kq = None  # kết quả cũ thuộc video khác
+        goc, ket_qua = st.columns(2, gap="medium")
+        with goc:
+            st.markdown("**🎬 Video gốc (chưa phân tích)**")
+            st.video(ban_xem_truoc(tep_video.file_id, Path(tep_video.name).suffix.lower(), tep_video.getvalue()))
+        with ket_qua:
+            st.markdown("**🛡️ Video đã phân tích**")
+            if kq:
+                st.video(kq["video"])
+            else:
+                st.info("Bấm **▶ Phân tích video** để xem video có đánh dấu công nhân và cảnh báo.")
+
+        if kq:
             mo_ta = (f"{kq['vp_frames']}/{kq['frames']} khung hình có vi phạm "
                      f"({kq['vp_frames'] / kq['frames']:.0%}) · {len({r[2] for r in kq['rows']})} lần cảnh báo")
             if kq["vp_frames"]:
@@ -302,26 +508,71 @@ with tab_video:
                 st.caption(f"Đã phân tích {kq['frames'] / kq['fps']:.0f} giây đầu trong tổng "
                            f"{kq['tong'] / kq['fps']:.0f} giây ({kq['so_lan_chay']} lần chạy mô hình).")
             ten_goc = Path(kq["ten"]).stem
-            st.download_button("⬇ Tải video kết quả", kq["video"], f"{ten_goc}_giam_sat.mp4", "video/mp4",
-                               width="stretch")
-            st.download_button("⬇ Tải nhật ký CSV", csv_nhat_ky(kq["rows"]), f"{ten_goc}_nhat_ky.csv", "text/csv",
-                               disabled=not kq["rows"], width="stretch")
-        if kq["canh_bao"]:
-            st.subheader("Khoảnh khắc vi phạm")
-            cot = st.columns(4)
-            for i, (jpg, chu_thich) in enumerate(kq["canh_bao"]):
-                cot[i % 4].image(jpg, caption=chu_thich, width="stretch")
-            st.subheader("Nhật ký cảnh báo")
-            st.dataframe(pd.DataFrame(kq["rows"], columns=COT_NHAT_KY), hide_index=True, width="stretch")
+            nut1, nut2 = st.columns(2)
+            nut1.download_button("⬇ Tải video kết quả", kq["video"], f"{ten_goc}_giam_sat.mp4", "video/mp4",
+                                 width="stretch")
+            nut2.download_button("⬇ Tải nhật ký CSV", csv_nhat_ky(kq["rows"]), f"{ten_goc}_nhat_ky.csv", "text/csv",
+                                 disabled=not kq["rows"], width="stretch")
+            if kq["canh_bao"]:
+                st.subheader("Khoảnh khắc vi phạm")
+                cot = st.columns(4)
+                for i, (jpg, chu_thich) in enumerate(kq["canh_bao"]):
+                    cot[i % 4].image(jpg, caption=chu_thich, width="stretch")
+                st.subheader("Nhật ký cảnh báo")
+                st.dataframe(pd.DataFrame(kq["rows"], columns=COT_NHAT_KY), hide_index=True, width="stretch")
+
+CHE_DO_CAMERA = ["📡 Video trực tiếp", "📸 Tự chụp mỗi giây"]
+
+
+def chuyen_sang_tu_chup():
+    st.session_state["che_do_camera"] = CHE_DO_CAMERA[1]
+
 
 with tab_camera:
-    st.caption("Bấm **Take Photo** để chụp từ webcam, ảnh sẽ được phân tích ngay. "
-               "Trình duyệt sẽ hỏi quyền dùng camera ở lần đầu.")
-    trai, phai = st.columns([2, 3], gap="medium")
-    with trai:
-        anh_cam = st.camera_input("Webcam", label_visibility="collapsed")
-    with phai:
-        if anh_cam is None:
-            st.info("Chưa có ảnh chụp.")
+    gs = st.session_state.setdefault("giam_sat_camera", GiamSatCamera())
+    gs.conf, gs.chu_ky, gs.tan_suat = conf, chu_ky, khung_moi_giay
+
+    st.session_state.setdefault("che_do_camera", CHE_DO_CAMERA[0])  # mặc định: video trực tiếp (A)
+    tren_trai, tren_phai = st.columns([3, 2], vertical_alignment="center")
+    with tren_trai:
+        che_do = st.segmented_control("Chế độ camera", CHE_DO_CAMERA, key="che_do_camera", required=True,
+                                      label_visibility="collapsed")
+    with tren_phai:
+        st.button("🗑 Xóa nhật ký camera", on_click=gs.xoa, width="stretch")
+
+    if che_do == CHE_DO_CAMERA[0]:
+        st.caption("Bấm **▶ Bắt đầu giám sát** rồi cho phép dùng camera. Video được gửi lên máy chủ qua WebRTC, "
+                   f"mô hình chạy khoảng {khung_moi_giay} lần/giây (chỉnh ở thanh bên trái).")
+        trai, phai = st.columns([1, 1], gap="medium")
+        with trai:
+            ctx = webrtc_streamer(
+                key="camera_truc_tiep", mode=WebRtcMode.SENDRECV,
+                rtc_configuration={"iceServers": may_chu_ice()},
+                video_frame_callback=gs.xu_ly_khung_webrtc,
+                media_stream_constraints={"video": {"width": {"ideal": 640}, "height": {"ideal": 480},
+                                                    "frameRate": {"ideal": 15, "max": 20}}, "audio": False},
+                async_processing=True, translations=DICH_WEBRTC,
+                video_html_attrs={"style": {"width": "100%", "borderRadius": "10px"}, "autoPlay": True,
+                                  "controls": False, "muted": True})
+            st.button("🔁 Không lên hình? Chuyển sang chế độ tự chụp mỗi giây", on_click=chuyen_sang_tu_chup,
+                      width="stretch")
+            st.caption("Nếu bấm Bắt đầu mà quay mãi không lên hình, nhiều khả năng mạng (wifi trường, công ty) "
+                       "đang chặn WebRTC. Chế độ tự chụp chạy được trên mọi mạng.")
+        with phai:
+            if ctx.state.playing:
+                bang_trang_thai_truc_tiep(gs)
+            else:
+                hien_thi_trang_thai_camera(gs)
+    else:
+        st.caption("Trình duyệt tự chụp webcam **mỗi giây** và gửi lên phân tích qua kết nối web thường, "
+                   "chạy được cả khi mạng chặn WebRTC. Kết quả cập nhật khoảng 1 lần/giây.")
+        if st.toggle("Bật camera", key="bat_tu_chup"):
+            che_do_tu_chup(gs)
+        elif gs.report is not None:
+            hien_thi_trang_thai_camera(gs)
         else:
-            hien_thi_ket_qua_anh("webcam.jpg", anh_cam.getvalue(), conf, "cam", xep_doc=True)
+            st.info("Bật công tắc để bắt đầu.")
+
+    st.info("💡 **Cần hình mượt nhất khi demo trước lớp?** Dùng app desktop trên laptop có GPU: "
+            "`.venv\Scripts\python.exe giao_dien.py` → chế độ **Camera** (khoảng 28 khung hình/giây, "
+            "có tạm dừng, âm thanh cảnh báo và lưu nhật ký).")

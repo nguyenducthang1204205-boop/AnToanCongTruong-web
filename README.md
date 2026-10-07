@@ -9,8 +9,27 @@ Bản web này chạy trên [Streamlit Community Cloud](https://streamlit.io/clo
 | Tab | Mô tả |
 |---|---|
 | 🖼️ Ảnh | Tải một hoặc nhiều ảnh (hoặc chọn ảnh mẫu). Kết quả gồm ảnh đã đánh dấu, trạng thái AN TOÀN / CẢNH BÁO, bảng ✔/✘ cho từng công nhân, nút tải ảnh kết quả và nhật ký CSV |
-| 🎞️ Video | Phân tích 30 giây đầu của video. Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
-| 📷 Camera | Chụp ảnh từ webcam của trình duyệt và phân tích ngay |
+| 🎞️ Video | Xem video gốc cạnh video đã phân tích (30 giây đầu). Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
+| 📷 Camera | **Video trực tiếp** qua WebRTC (mặc định). Nếu mạng chặn WebRTC thì dùng **Tự chụp mỗi giây**. Bảng trạng thái, ảnh cảnh báo gần nhất và nhật ký tự cập nhật |
+
+### Khi chế độ Video trực tiếp không lên hình
+
+Chế độ này dùng máy chủ STUN miễn phí của Google. Một số mạng (wifi trường, công ty) chặn WebRTC. Khi đó có hai cách:
+
+1. Bấm **"Không lên hình? Chuyển sang chế độ tự chụp mỗi giây"**. Chế độ này chạy qua kết nối web thường.
+2. Thêm máy chủ TURN miễn phí (ví dụ [Metered](https://www.metered.ca/stun-turn)) vào **Settings → Secrets** của app trên Streamlit Cloud:
+
+```toml
+[[ice_servers]]
+urls = ["stun:stun.l.google.com:19302"]
+
+[[ice_servers]]
+urls = ["turn:<máy-chủ>:80", "turn:<máy-chủ>:443?transport=tcp"]
+username = "<tên đăng nhập>"
+credential = "<mật khẩu>"
+```
+
+Muốn hình mượt nhất (khoảng 28 khung hình/giây) khi demo, hãy dùng app desktop `giao_dien.py` trong repo đồ án chính, chạy trên laptop có GPU.
 
 ## Cách hoạt động
 
