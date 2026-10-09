@@ -70,6 +70,44 @@ def phan_tich(frame, conf, ve=True):
     return report, (core.ve_ket_qua(frame, report) if ve else None)
 
 
+class GhiPhatHien:
+    """Bọc mô hình để giữ lại kết quả thô của lần predict (lớp, độ tin cậy, kể cả Person) và thời gian suy luận,
+    vì báo cáo của notebook không giữ độ tin cậy của công nhân. Không phải sửa logic của notebook."""
+
+    def __init__(self, mo_hinh):
+        self.mo_hinh, self.names = mo_hinh, mo_hinh.names
+        self.phat_hien, self.ms = [], 0.0
+
+    def predict(self, **kw):
+        t0 = time.perf_counter()
+        kq = self.mo_hinh.predict(**kw)
+        self.ms = (time.perf_counter() - t0) * 1000
+        self.phat_hien = [(self.names[int(b.cls.item())], float(b.conf.item())) for b in kq[0].boxes]
+        return kq
+
+
+def phan_tich_ghi_lai(frame, conf):
+    """Như phan_tich, trả thêm danh sách (lớp, độ tin cậy) và thời gian suy luận (ms) của lần chạy này."""
+    with khoa_mo_hinh:
+        ghi = GhiPhatHien(core.detector)
+        report = core.phan_tich_khung_hinh(ghi, frame, conf=conf)
+    return report, core.ve_ket_qua(frame, report), ghi.phat_hien, ghi.ms
+
+
+def ve_ban_do_nhiet(nen, luoi):
+    """Chồng mật độ vị trí đứng (chân) của công nhân vi phạm lên khung hình nền: nền xám tối đi, chỗ vi phạm nhiều
+    tô đỏ cam đậm dần (một sắc màu). Trả về JPEG, hoặc None nếu không có vi phạm."""
+    if nen is None or luoi.max() <= 0:
+        return None
+    h, w = nen.shape[:2]
+    mat_do = cv2.GaussianBlur(luoi, (0, 0), sigmaX=max(luoi.shape) / 22)
+    mat_do = cv2.resize(mat_do / mat_do.max(), (w, h), interpolation=cv2.INTER_LINEAR)[..., None]
+    xam = cv2.cvtColor(cv2.cvtColor(nen, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR).astype(np.float32) * 0.72
+    do = np.array((24, 60, 220), np.float32)  # BGR, đỏ cam
+    anh = xam * (1 - mat_do * 0.85) + do * mat_do * 0.85
+    return cv2.imencode(".jpg", anh.clip(0, 255).astype(np.uint8), [cv2.IMWRITE_JPEG_QUALITY, 88])[1].tobytes()
+
+
 # ---------------------------------------------------------------------- trình bày kết quả
 # Biểu tượng SVG (Lucide, 24×24, nét theo màu chữ). HTML tự viết không biết người xem đang dùng nền sáng hay tối
 # (st.context.theme có thể sai lúc mới tải trang), nên chỉ dùng nền đặc + chữ trắng hoặc màu trong suốt.
@@ -341,6 +379,11 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
     frames, vp_frames, so_lan_chay, last_alert = 0, 0, 0, float("-inf")
     canh_bao, rows = [], []
     dien_bien, dem_thieu = [], collections.Counter()  # cho biểu đồ: (thời điểm, công nhân, người thiếu) mỗi lần chạy
+    # cho phần "mô hình trên video này": (thời điểm, lớp, độ tin cậy) mỗi phát hiện, (thời điểm, ms) mỗi lần chạy,
+    # (thời điểm, trang bị, số người thiếu) và lưới vị trí đứng của công nhân vi phạm (để vẽ bản đồ nhiệt)
+    phat_hien, thoi_gian_suy_luan, thieu_theo_lan = [], [], []
+    luoi, nen, nhieu_vp_nhat = None, None, -1
+    cong_nhan_dat = cong_nhan_tong = 0
     try:
         while True:
             ok, frame = cap.read()
@@ -349,10 +392,27 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
             frame = gioi_han_kich_thuoc(frame)
             thoi_diem = frames / fps
             if frames % buoc == 0:
-                report, annotated = phan_tich(frame, conf)
+                report, annotated, dets, ms = phan_tich_ghi_lai(frame, conf)
                 so_lan_chay += 1
-                dien_bien.append((round(thoi_diem, 2), report["so_cong_nhan"], report["so_nguoi_vi_pham"]))
+                t = round(thoi_diem, 2)
+                dien_bien.append((t, report["so_cong_nhan"], report["so_nguoi_vi_pham"]))
                 dem_thieu.update(ten for w in report["workers"] for ten, _ in w["thieu"])
+                phat_hien += [(t, lop, round(c, 3)) for lop, c in dets]
+                thoi_gian_suy_luan.append((t, round(ms, 1)))
+                thieu_theo_lan += [(t, ten, so) for ten, so in collections.Counter(
+                    ten for w in report["workers"] for ten, _ in w["thieu"]).items()]
+                cong_nhan_tong += report["so_cong_nhan"]
+                cong_nhan_dat += report["so_cong_nhan"] - report["so_nguoi_vi_pham"]
+                if luoi is None:  # lưới thô 1/8 kích thước khung hình
+                    luoi = np.zeros((max(1, frame.shape[0] // 8), max(1, frame.shape[1] // 8)), np.float32)
+                for w in report["workers"]:
+                    if not w["dat_chuan"]:
+                        x1, y1, x2, y2 = w["xyxy"]
+                        cx = min(luoi.shape[1] - 1, max(0, (x1 + x2) // 16))
+                        cy = min(luoi.shape[0] - 1, max(0, y2 // 8 - 1))  # chân = vị trí đứng trên công trường
+                        luoi[cy, cx] += 1
+                if report["so_nguoi_vi_pham"] > nhieu_vp_nhat:  # nền bản đồ nhiệt: khung có nhiều người vi phạm nhất
+                    nhieu_vp_nhat, nen = report["so_nguoi_vi_pham"], frame.copy()
                 if report["canh_bao"] and thoi_diem - last_alert >= chu_ky:
                     last_alert = thoi_diem
                     ten_anh = f"canh_bao_{thoi_diem:06.1f}s.jpg"
@@ -382,7 +442,10 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
     sang_h264(tam, ra)
     return {"video": ra.read_bytes(), "ten": ten, "frames": frames, "vp_frames": vp_frames, "tong": tong,
             "fps": fps, "so_lan_chay": so_lan_chay, "canh_bao": canh_bao, "rows": rows,
-            "dien_bien": dien_bien, "dem_thieu": dict(dem_thieu)}
+            "dien_bien": dien_bien, "dem_thieu": dict(dem_thieu), "phat_hien": phat_hien,
+            "thoi_gian_suy_luan": thoi_gian_suy_luan, "thieu_theo_lan": thieu_theo_lan,
+            "ty_le_tuan_thu": cong_nhan_dat / cong_nhan_tong if cong_nhan_tong else None,
+            "ban_do_nhiet": ve_ban_do_nhiet(nen, luoi) if luoi is not None else None}
 
 
 # ---------------------------------------------------------------------- camera trực tiếp
@@ -847,6 +910,8 @@ def tab_video_noi_dung(conf, chu_ky, khung_moi_giay):
             else:
                 bieu_do(chart)
                 st.caption("Đếm theo lượt: một công nhân thiếu trong một lần chạy mô hình tính là một lượt.")
+    if kq.get("phat_hien") is not None:
+        mo_hinh_tren_video(kq, conf)
     if kq["canh_bao"]:
         muc("Bằng chứng", "Khoảnh khắc vi phạm", "Ảnh chụp tại mỗi lần cảnh báo (tối đa 12 ảnh).")
         cot = st.columns(4)
@@ -854,6 +919,60 @@ def tab_video_noi_dung(conf, chu_ky, khung_moi_giay):
             cot[i % 4].image(jpg, caption=chu_thich, width="stretch")
         muc("Nhật ký", "Nhật ký cảnh báo")
         st.dataframe(pd.DataFrame(kq["rows"], columns=COT_NHAT_KY), hide_index=True, width="stretch")
+
+
+def mo_hinh_tren_video(kq, conf):
+    """Phân tích trực tiếp từ các lần chạy mô hình trên video vừa tải lên: độ tin cậy, thời gian suy luận,
+    dòng thời gian vi phạm theo trang bị và bản đồ nhiệt vị trí vi phạm."""
+    muc("Mô hình trên video này", "Độ tin cậy và vị trí vi phạm",
+        "Tính trực tiếp từ các lần chạy mô hình trên video vừa tải lên.")
+    nhan_xet("Video tải lên không có nhãn đúng nên <b>không đo được độ chính xác</b> (Precision, Recall, mAP) trên "
+             "video này. <b>Độ tin cậy</b> cho biết mô hình chắc chắn đến đâu về mỗi phát hiện. Độ chính xác thật đo "
+             "trên tập kiểm tra có nhãn, xem ở trang <b>Hiệu năng mô hình</b>.")
+    phat_hien = kq["phat_hien"]
+    ms = sorted(m for _, m in kq["thoi_gian_suy_luan"])
+    tin_cay = [c for _, _, c in phat_hien]
+    chi_so(("Độ tin cậy trung bình", bd.phan_tram(sum(tin_cay) / len(tin_cay)) if tin_cay else "–"),
+           ("Lượt phát hiện", so_vn(len(phat_hien))),
+           ("Suy luận mỗi lần (CPU)", f"{ms[len(ms) // 2]:.0f} ms" if ms else "–"),
+           ("Tỷ lệ tuân thủ", bd.phan_tram(kq["ty_le_tuan_thu"]) if kq.get("ty_le_tuan_thu") is not None else "–"))
+    st.caption("Suy luận mỗi lần: trung vị thời gian mô hình xử lý một khung hình trên CPU của máy chủ miễn phí. "
+               "Tỷ lệ tuân thủ: số lượt công nhân đủ 4 trang bị trên tổng số lượt công nhân phát hiện được.")
+
+    trai, phai = st.columns([3, 2], gap="medium")
+    with trai, st.container(border=True):
+        st.markdown("**Độ tin cậy trung bình theo từng giây**")
+        chart = bd.bd_do_tin_cay_theo_thoi_gian(phat_hien, conf)
+        if chart is None:
+            st.info("Mô hình không phát hiện được gì trong video.", icon=":material/info:")
+        else:
+            bieu_do(chart)
+    with phai, st.container(border=True):
+        st.markdown("**Phân bố độ tin cậy theo lớp**")
+        chart = bd.bd_phan_bo_do_tin_cay(phat_hien, conf)
+        if chart is not None:
+            bieu_do(chart)
+            st.caption("Số sau tên lớp là số lượt phát hiện. Hộp: một nửa số lượt nằm trong khoảng này; vạch "
+                       "trắng: trung vị; râu: thấp nhất đến cao nhất. Lớp nằm lệch trái là lớp mô hình hay phân vân.")
+
+    trai, phai = st.columns([3, 2], gap="medium")
+    with trai, st.container(border=True):
+        st.markdown("**Dòng thời gian vi phạm theo trang bị**")
+        thu_tu = [ten for ten, _, _, _ in core.PPE_RULES] + [ten for ten, _ in core.EXTRA_VIOLATIONS.values()]
+        chart = bd.bd_dong_thoi_gian_vi_pham(kq["thieu_theo_lan"], thu_tu, kq["frames"] / kq["fps"])
+        if chart is None:
+            st.success("Không có công nhân nào thiếu trang bị trong video.", icon=":material/verified:")
+        else:
+            bieu_do(chart)
+            st.caption("Mỗi ô là một giây; màu càng đậm thì càng nhiều công nhân thiếu món đó cùng lúc.")
+    with phai, st.container(border=True):
+        st.markdown("**Bản đồ nhiệt vị trí vi phạm**")
+        if kq.get("ban_do_nhiet"):
+            st.image(kq["ban_do_nhiet"], width="stretch")
+            st.caption("Vùng đỏ là nơi công nhân vi phạm đứng nhiều nhất (tính theo vị trí chân), chồng lên khung "
+                       "hình có nhiều người vi phạm nhất. Dùng để xác định khu vực cần nhắc nhở.")
+        else:
+            st.success("Không có vị trí vi phạm nào để hiển thị.", icon=":material/verified:")
 
 
 def tab_camera_noi_dung(conf, chu_ky, khung_moi_giay):

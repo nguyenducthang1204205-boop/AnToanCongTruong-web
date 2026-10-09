@@ -233,3 +233,100 @@ def bd_trang_bi_thieu(dem, don_vi):
     chu = goc.mark_text(align="left", dx=6, fontSize=12, color="#64748b").encode(text="Số lần:Q")
     return (thanh + chu).properties(height=max(120, 46 * len(df)), padding={"right": 30, "left": 4, "top": 4,
                                                                             "bottom": 4})
+
+
+# ---------------------------------------------------------------------- mô hình trên video vừa phân tích
+NHOM_LOP = {"Person": "Công nhân", **{lop: "Trang bị" for lop in BAT_BUOC},
+            **{lop: "Dấu hiệu vi phạm" for lop in ("bare-arms", "no-boot", "no-helmet", "no-vest")}}
+THU_TU_NHOM = ["Công nhân", "Trang bị", "Dấu hiệu vi phạm"]
+
+
+def _phan_tram_hoac_gach(truong):
+    """Như PHAN_TRAM_VN nhưng ghi '–' khi giây đó không có phát hiện của nhóm."""
+    return f"isValid(datum[{truong!r}]) ? {PHAN_TRAM_VN(truong)} : '–'"
+
+
+def _vach_nguong(nguong, truc="y"):
+    """Vạch tham chiếu ở ngưỡng tin cậy đang dùng (phát hiện dưới ngưỡng đã bị bỏ, không có trong dữ liệu)."""
+    df = pd.DataFrame({"v": [nguong], "nhan": [f"Ngưỡng {phan_tram(nguong, 0)}"]})
+    if truc == "y":
+        vach = alt.Chart(df).mark_rule(color="#94a3b8", strokeDash=[4, 4]).encode(y="v:Q")
+        chu = alt.Chart(df).mark_text(align="left", baseline="bottom", dx=4, dy=-3, fontSize=11).encode(
+            y="v:Q", x=alt.value(0), text="nhan:N", color=alt.value("#64748b"))
+    else:
+        vach = alt.Chart(df).mark_rule(color="#94a3b8", strokeDash=[4, 4]).encode(x="v:Q")
+        chu = alt.Chart(df).mark_text(align="left", baseline="top", dx=4, fontSize=11).encode(
+            x="v:Q", y=alt.value(0), text="nhan:N", color=alt.value("#64748b"))
+    return vach + chu
+
+
+def bd_do_tin_cay_theo_thoi_gian(phat_hien, nguong):
+    """Độ tin cậy trung bình theo từng giây, tách 3 nhóm lớp; rê chuột để xem giá trị cả 3 nhóm tại giây đó."""
+    df = pd.DataFrame(phat_hien, columns=["t", "Lớp gốc", "Độ tin cậy"])
+    if df.empty:
+        return None
+    df["Nhóm"] = df["Lớp gốc"].map(NHOM_LOP)
+    df["Giây"] = df["t"].astype(int)
+    dai = df.groupby(["Giây", "Nhóm"], as_index=False)["Độ tin cậy"].mean()
+    rong = dai.pivot(index="Giây", columns="Nhóm", values="Độ tin cậy").reset_index()
+    for nhom in THU_TU_NHOM:
+        if nhom not in rong:
+            rong[nhom] = None
+    chon = alt.selection_point(nearest=True, on="pointerover", fields=["Giây"], empty=False, clear="pointerout")
+    goc = alt.Chart(dai).encode(
+        x=alt.X("Giây:Q", title="Thời điểm trong video (giây)", axis=alt.Axis(grid=False, tickCount=8)),
+        y=alt.Y("Độ tin cậy:Q", title=None, scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%", tickCount=5)),
+        color=alt.Color("Nhóm:N", scale=alt.Scale(domain=THU_TU_NHOM),
+                        legend=alt.Legend(orient="top", title=None, columns=3)))
+    duong = goc.mark_line(strokeWidth=2, interpolate="monotone")
+    diem = goc.mark_point(filled=True, size=70, stroke="white", strokeWidth=2).encode(
+        opacity=alt.condition(chon, alt.value(1), alt.value(0)))
+    doc = alt.Chart(rong)
+    for i, nhom in enumerate(THU_TU_NHOM):
+        doc = doc.transform_calculate(**{f"_{i}": _phan_tram_hoac_gach(nhom)})
+    doc = doc.mark_rule(strokeWidth=1, color="#94a3b8").encode(
+        x="Giây:Q", opacity=alt.condition(chon, alt.value(0.8), alt.value(0)),
+        tooltip=[alt.Tooltip("Giây:Q", title="Giây thứ")] + [alt.Tooltip(f"_{i}:N", title=nhom)
+                                                            for i, nhom in enumerate(THU_TU_NHOM)]).add_params(chon)
+    return (duong + diem + doc + _vach_nguong(nguong)).properties(height=280)
+
+
+def bd_phan_bo_do_tin_cay(phat_hien, nguong):
+    """Biểu đồ hộp độ tin cậy của từng lớp trên video (lớp mô hình hay phân vân nằm thấp hơn)."""
+    df = pd.DataFrame(phat_hien, columns=["t", "Lớp gốc", "Độ tin cậy"])
+    if df.empty:
+        return None
+    so = df["Lớp gốc"].value_counts()
+    df["Lớp"] = df["Lớp gốc"].map(lambda lop: f"{TEN_LOP[lop]} · {so[lop]}")
+    hop = alt.Chart(df).mark_boxplot(extent="min-max", size=14, ticks=False, median={"color": "white"}).encode(
+        y=alt.Y("Lớp:N", title=None, axis=AN_TRUC,
+                sort=alt.EncodingSortField(field="Độ tin cậy", op="median", order="descending")),
+        x=alt.X("Độ tin cậy:Q", title="Độ tin cậy",
+                scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%", tickCount=5)))
+    return (hop + _vach_nguong(nguong, truc="x")).properties(height=34 * df["Lớp"].nunique() + 70)
+
+
+def bd_dong_thoi_gian_vi_pham(thieu_theo_lan, thu_tu, thoi_luong):
+    """Mỗi hàng một trang bị, mỗi ô một giây: số người thiếu nhiều nhất trong giây đó (đậm = nhiều người)."""
+    df = pd.DataFrame(thieu_theo_lan, columns=["t", "Trang bị", "Số người"])
+    if df.empty:
+        return None
+    df["Giây"] = df["t"].astype(int)
+    df = df.groupby(["Giây", "Trang bị"], as_index=False)["Số người"].max()
+    df["Hết"] = df["Giây"] + 1
+    thu_tu = [ten for ten in thu_tu if ten in set(df["Trang bị"])] or sorted(set(df["Trang bị"]))
+    y = alt.Y("Trang bị:N", sort=thu_tu, title=None, axis=AN_TRUC, scale=alt.Scale(domain=thu_tu, paddingInner=0.18))
+    x = alt.X("Giây:Q", title="Thời điểm trong video (giây)",
+              scale=alt.Scale(domain=[0, max(1, int(thoi_luong + 0.999))], nice=False),
+              axis=alt.Axis(grid=False, tickCount=8))
+    nen = alt.Chart(pd.DataFrame({"Trang bị": thu_tu, "Giây": 0, "Hết": thoi_luong})).mark_rect(
+        color="#94a3b8", opacity=0.12, cornerRadius=3).encode(y=y, x=x, x2="Hết:Q")
+    o = alt.Chart(df).mark_rect(cornerRadius=2).encode(
+        y=y, x=x, x2="Hết:Q",
+        color=alt.Color("Số người:Q", title="Số người thiếu",
+                        scale=alt.Scale(domain=[0, max(1, int(df["Số người"].max()))], range=["#fbd5bd", "#9a3412"]),
+                        legend=alt.Legend(orient="bottom", gradientLength=180, tickMinStep=1, format="d")),
+        tooltip=[alt.Tooltip("Giây:Q", title="Giây thứ"), alt.Tooltip("Trang bị:N"),
+                 alt.Tooltip("Số người:Q", title="Số người thiếu")])
+    # Streamlit vẽ với autosize "fit": chiều cao gồm cả trục x và chú thích màu bên dưới (~110 px)
+    return (nen + o).properties(height=46 * len(thu_tu) + 110)

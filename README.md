@@ -11,7 +11,7 @@ Bản web này chạy trên [Streamlit Community Cloud](https://streamlit.io/clo
 | Tab | Mô tả |
 |---|---|
 | 🖼️ Ảnh | Tải một hoặc nhiều ảnh (hoặc chọn ảnh mẫu). Nhiều ảnh thì có phần tổng hợp: tỷ lệ tuân thủ và biểu đồ trang bị bị thiếu. Kết quả từng ảnh gồm ảnh đã đánh dấu, trạng thái AN TOÀN / CẢNH BÁO, bảng ✔/✘ cho từng công nhân, nút tải ảnh kết quả và nhật ký CSV |
-| 🎞️ Video | Phân tích toàn bộ video, nên video kết quả dài đúng bằng video gốc. Hai video đặt cạnh nhau và phát cùng lúc (phát, tạm dừng, tua ở một bên thì bên kia làm theo). Kết quả gồm video đã đánh dấu, biểu đồ diễn biến vi phạm theo từng giây, biểu đồ trang bị bị thiếu, ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
+| 🎞️ Video | Phân tích toàn bộ video, nên video kết quả dài đúng bằng video gốc. Hai video đặt cạnh nhau và phát cùng lúc (phát, tạm dừng, tua ở một bên thì bên kia làm theo). Kết quả gồm video đã đánh dấu, biểu đồ diễn biến vi phạm theo từng giây, biểu đồ trang bị bị thiếu, phần **Mô hình trên video này** (độ tin cậy theo thời gian và theo lớp, thời gian suy luận, tỷ lệ tuân thủ, dòng thời gian vi phạm theo trang bị, bản đồ nhiệt vị trí vi phạm), ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
 | 📷 Camera | **Video trực tiếp** qua WebRTC (mặc định). Nếu mạng chặn WebRTC thì dùng **Tự chụp mỗi giây**. Bảng trạng thái, ảnh cảnh báo gần nhất và nhật ký tự cập nhật |
 
 ### Trang Hiệu năng mô hình
