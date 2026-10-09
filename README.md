@@ -16,7 +16,7 @@ Bản web này chạy trên [Streamlit Community Cloud](https://streamlit.io/clo
 
 ### Trang Hiệu năng mô hình
 
-Số liệu thật của lần huấn luyện và đánh giá (`assets/mo_hinh/`, số theo lớp lấy từ kết quả `model.val()` trong notebook): Precision, Recall, mAP50, mAP50-95 trên tập val / test; biểu đồ từng lớp; bản đồ nhiệt lớp × chỉ số; phân bố dữ liệu; đường cong huấn luyện 50 epoch; và các biểu đồ gốc của Ultralytics (ma trận nhầm lẫn, đường PR / F1 / P / R, results.png).
+Số liệu thật của lần huấn luyện và đánh giá (`assets/mo_hinh/`, số theo lớp lấy từ kết quả `model.val()` trong notebook): Precision, Recall, mAP50, mAP50-95 trên tập val / test; so sánh mô hình mới (v2, huấn luyện lại sau khi thêm 91 ảnh tự gán nhãn) với mô hình cũ (v1), cả về chỉ số nhận diện lẫn kết luận tuân thủ của từng công nhân; biểu đồ từng lớp; bản đồ nhiệt lớp × chỉ số; phân bố dữ liệu; đường cong huấn luyện 50 epoch; và các biểu đồ gốc của Ultralytics (ma trận nhầm lẫn, đường PR / F1 / P / R, results.png).
 
 ### Khi chế độ Video trực tiếp không lên hình
 
