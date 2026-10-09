@@ -19,6 +19,8 @@ linkColor = "#C2410C"
 redColor = "#DC2626"
 greenColor = "#15803D"
 dataframeHeaderBackgroundColor = "#EEF2F6"
+# Màu loạt dữ liệu của biểu đồ, thứ tự cố định (đã kiểm tra mù màu trên nền #f8fafc và #0b1220)
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
 [theme.light.sidebar]
 backgroundColor = "#FFFFFF"
@@ -34,6 +36,7 @@ linkColor = "#FB923C"
 redColor = "#F87171"
 greenColor = "#4ADE80"
 dataframeHeaderBackgroundColor = "#172235"
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
 
 [theme.dark.sidebar]
 backgroundColor = "#0F1829"

@@ -7,6 +7,7 @@ Chạy thử trên máy (từ thư mục dự án):
     .venv\\Scripts\\streamlit.exe run streamlit_app\\streamlit_app.py
 """
 import base64
+import collections
 import csv
 import io
 import os
@@ -26,6 +27,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
+
+import bieu_do as bd
 
 APP_DIR = Path(__file__).resolve().parent
 os.chdir(APP_DIR)  # notebook dùng PROJECT_DIR = Path.cwd(); trọng số ở runs/detect/train/weights/best.pt
@@ -337,6 +340,7 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
     writer, report = None, None
     frames, vp_frames, so_lan_chay, last_alert = 0, 0, 0, float("-inf")
     canh_bao, rows = [], []
+    dien_bien, dem_thieu = [], collections.Counter()  # cho biểu đồ: (thời điểm, công nhân, người thiếu) mỗi lần chạy
     try:
         while True:
             ok, frame = cap.read()
@@ -347,6 +351,8 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
             if frames % buoc == 0:
                 report, annotated = phan_tich(frame, conf)
                 so_lan_chay += 1
+                dien_bien.append((round(thoi_diem, 2), report["so_cong_nhan"], report["so_nguoi_vi_pham"]))
+                dem_thieu.update(ten for w in report["workers"] for ten, _ in w["thieu"])
                 if report["canh_bao"] and thoi_diem - last_alert >= chu_ky:
                     last_alert = thoi_diem
                     ten_anh = f"canh_bao_{thoi_diem:06.1f}s.jpg"
@@ -375,7 +381,8 @@ def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_
     thanh_tien_do.progress(0.97, text="Đang xuất video kết quả…")
     sang_h264(tam, ra)
     return {"video": ra.read_bytes(), "ten": ten, "frames": frames, "vp_frames": vp_frames, "tong": tong,
-            "fps": fps, "so_lan_chay": so_lan_chay, "canh_bao": canh_bao, "rows": rows}
+            "fps": fps, "so_lan_chay": so_lan_chay, "canh_bao": canh_bao, "rows": rows,
+            "dien_bien": dien_bien, "dem_thieu": dict(dem_thieu)}
 
 
 # ---------------------------------------------------------------------- camera trực tiếp
@@ -575,57 +582,146 @@ DICH_WEBRTC = {
 }
 
 
-# ---------------------------------------------------------------------- giao diện
-st.markdown(f"""
+# ---------------------------------------------------------------------- giao diện chung
+CSS = """
 <style>
-  .block-container {{padding-top: 4.25rem; max-width: 1320px}}
-  [data-testid="stImageCaption"] {{font-size: .85rem}}
-  .dau-trang {{display: flex; align-items: center; gap: 16px; margin-bottom: .25rem}}
-  .dau-trang .logo {{flex: none; display: grid; place-items: center; width: 56px; height: 56px;
-                    border-radius: 14px; background: #EA580C; color: #fff}}
-  .dau-trang h1 {{font-size: 1.75rem; line-height: 1.25; margin: 0; padding: 0}}
-  .dau-trang p {{margin: .15rem 0 .45rem; opacity: .75}}
-  .the-ppe {{display: inline-block; margin: 0 6px 4px 0; padding: 2px 10px; border-radius: 999px;
-            border: 1px solid rgba(128, 128, 128, .45); font-size: .8rem; font-weight: 500}}
-  .trang-thai {{display: flex; align-items: center; gap: 14px; color: #fff; border-radius: 12px;
-               padding: 12px 16px; margin-bottom: .25rem}}
-  .trang-thai svg {{flex: none}}
-  .trang-thai .tieu-de {{font-size: 1.15rem; font-weight: 700; letter-spacing: .4px}}
-  .trang-thai .mo-ta {{font-size: .95rem; opacity: .95}}
-  .chu-giai {{list-style: none; padding: 0; margin: 0}}
-  .chu-giai li {{display: flex; align-items: center; gap: 10px; margin: 0 0 .45rem; font-size: .9rem}}
-  .chu-giai .o {{flex: none; width: 22px; height: 16px; border-radius: 3px; border: 3px solid}}
-  .chu-giai .o.mong {{border-width: 1.5px}}
-  .chu-giai .ky-hieu {{flex: none; width: 22px; font-size: .8rem; letter-spacing: -1px}}
-  @media (max-width: 640px) {{
-    .dau-trang {{align-items: flex-start}}
-    .dau-trang .logo {{width: 44px; height: 44px; border-radius: 12px}}
-    .dau-trang h1 {{font-size: 1.35rem}}
-  }}
+  .block-container {padding-top: 4.5rem; max-width: 1320px}
+  [data-testid="stImageCaption"] {font-size: .85rem}
+  /* Phần đầu trang: khung tối cố định ở cả hai giao diện, sọc cảnh báo cam/đen như băng rào công trường */
+  .hero {position: relative; overflow: hidden; display: flex; gap: 32px; justify-content: space-between;
+         padding: 30px 32px 26px; margin-bottom: 1.4rem; border-radius: 18px; color: #f8fafc;
+         border: 1px solid rgba(148, 163, 184, .18);
+         background: radial-gradient(640px 260px at 100% 0%, rgba(234, 88, 12, .32), transparent 70%),
+                     linear-gradient(135deg, #0b1220 0%, #111c33 55%, #1b2740 100%)}
+  .hero::before {content: ""; position: absolute; inset: 0 0 auto 0; height: 6px;
+                 background: repeating-linear-gradient(135deg, #ea580c 0 14px, #0b1220 14px 28px)}
+  .hero .trai {display: flex; gap: 18px; align-items: flex-start; min-width: 0}
+  .hero .logo {flex: none; display: grid; place-items: center; width: 58px; height: 58px; border-radius: 16px;
+               background: linear-gradient(160deg, #f97316, #c2410c); color: #fff;
+               box-shadow: 0 10px 30px -8px rgba(234, 88, 12, .6)}
+  .hero .nho {font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #fdba74}
+  .hero h1 {color: #fff; font-size: 1.9rem; line-height: 1.2; margin: .3rem 0 .45rem; padding: 0; text-wrap: balance}
+  .hero p {color: #cbd5e1; max-width: 600px; margin: 0 0 .9rem; font-size: .98rem}
+  .hero .the-ppe {display: inline-flex; align-items: center; gap: 6px; margin: 0 6px 6px 0; padding: 3px 11px;
+                  border-radius: 999px; border: 1px solid rgba(148, 163, 184, .35); color: #e2e8f0;
+                  background: rgba(15, 23, 42, .45); font-size: .8rem; font-weight: 500}
+  .hero .the-ppe::before {content: ""; width: 6px; height: 6px; border-radius: 50%; background: #f97316}
+  .hero .so {flex: none; display: grid; grid-template-columns: repeat(2, 148px); gap: 12px; align-self: center}
+  .hero .o {padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, .04);
+            border: 1px solid rgba(148, 163, 184, .18)}
+  .hero .gia-tri {font-size: 1.55rem; font-weight: 700; color: #fff; line-height: 1.2; font-variant-numeric: tabular-nums}
+  .hero .nhan {font-size: .78rem; color: #94a3b8; margin-top: 2px}
+  /* Tiêu đề mục: dòng chữ nhỏ viết hoa + tiêu đề + mô tả */
+  .muc {margin: .6rem 0 .5rem}
+  .muc .nho {font-size: .72rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; opacity: .6}
+  .muc h3 {font-size: 1.25rem; margin: .15rem 0 .1rem; padding: 0}
+  .muc p {margin: 0; opacity: .72; font-size: .92rem}
+  .nhan-xet {padding: 12px 16px; border-radius: 12px; border-left: 4px solid #ea580c;
+             background: rgba(234, 88, 12, .08); font-size: .93rem; margin: .4rem 0 .2rem}
+  .trang-thai {display: flex; align-items: center; gap: 14px; color: #fff; border-radius: 12px;
+               padding: 12px 16px; margin-bottom: .25rem}
+  .trang-thai svg {flex: none}
+  .trang-thai .tieu-de {font-size: 1.15rem; font-weight: 700; letter-spacing: .4px}
+  .trang-thai .mo-ta {font-size: .95rem; opacity: .95}
+  .chu-giai {list-style: none; padding: 0; margin: 0}
+  .chu-giai li {display: flex; align-items: center; gap: 10px; margin: 0 0 .45rem; font-size: .9rem}
+  .chu-giai .o {flex: none; width: 22px; height: 16px; border-radius: 3px; border: 3px solid}
+  .chu-giai .o.mong {border-width: 1.5px}
+  .chu-giai .ky-hieu {flex: none; width: 22px; font-size: .8rem; letter-spacing: -1px}
+  .chan-trang {margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid rgba(128, 128, 128, .25);
+               font-size: .82rem; opacity: .65}
+  @media (max-width: 900px) {
+    .hero {flex-direction: column; padding: 26px 20px 20px; gap: 18px}
+    .hero .so {grid-template-columns: repeat(2, minmax(0, 1fr))}
+    .hero h1 {font-size: 1.5rem}
+    .hero .logo {width: 46px; height: 46px; border-radius: 13px}
+  }
+  @media (prefers-reduced-motion: reduce) {* {transition: none !important; animation: none !important}}
 </style>
-<div class="dau-trang">
-  <div class="logo">{svg(ICON_MU, 30)}</div>
-  <div>
-    <h1>Giám sát an toàn công trường</h1>
-    <p>Mô hình YOLOv11n kiểm tra từng công nhân có đủ 4 trang bị bảo hộ bắt buộc và cảnh báo khi thiếu.</p>
-    {"".join(f'<span class="the-ppe">{ten}</span>' for ten, _, _, _ in core.PPE_RULES)}
-  </div>
-</div>
-""", unsafe_allow_html=True)
+"""
 
-with st.sidebar:
-    st.subheader(":material/tune: Cài đặt nhận diện")
-    conf = st.slider("Ngưỡng tin cậy", 0.10, 0.90, float(core.CONF_THRESHOLD), 0.05,
-                     help="Thấp: phát hiện nhiều hơn nhưng dễ nhầm. Cao: chắc chắn hơn nhưng dễ bỏ sót.")
-    chu_ky = st.slider("Chu kỳ cảnh báo (giây)", 1, 10, 3,
-                       help="Khoảng cách tối thiểu giữa hai lần ghi cảnh báo trong video và camera.")
-    khung_moi_giay = st.slider("Số lần phân tích mỗi giây", 1, 10, 4,
-                               help="Áp dụng cho video và camera. Càng cao càng chính xác nhưng càng chậm "
-                                    "(máy chủ miễn phí chỉ có CPU).")
-    st.divider()
-    st.subheader(":material/info: Cách đọc kết quả")
-    # Màu khung giống màu ve_ket_qua vẽ lên ảnh (GREEN, RED, BLUE của notebook, đổi từ BGR sang RGB)
-    st.markdown("""
+
+def so_vn(x):
+    return f"{x:,}".replace(",", ".")
+
+
+def hero(nho, tieu_de, mo_ta, so_lieu):
+    """Phần đầu trang: logo, tiêu đề, 4 nhãn trang bị và 4 ô số liệu nổi bật."""
+    the = "".join(f'<span class="the-ppe">{ten}</span>' for ten, _, _, _ in core.PPE_RULES)
+    o = "".join(f'<div class="o"><div class="gia-tri">{gt}</div><div class="nhan">{nhan}</div></div>'
+                for gt, nhan in so_lieu)
+    st.markdown(f'<div class="hero"><div class="trai"><div class="logo">{svg(ICON_MU, 30)}</div><div>'
+                f'<div class="nho">{nho}</div><h1>{tieu_de}</h1><p>{mo_ta}</p>{the}</div></div>'
+                f'<div class="so">{o}</div></div>', unsafe_allow_html=True)
+
+
+def muc(nho, tieu_de, mo_ta=""):
+    st.markdown(f'<div class="muc"><div class="nho">{nho}</div><h3>{tieu_de}</h3>'
+                + (f"<p>{mo_ta}</p>" if mo_ta else "") + "</div>", unsafe_allow_html=True)
+
+
+def nhan_xet(html):
+    st.markdown(f'<div class="nhan-xet">{html}</div>', unsafe_allow_html=True)
+
+
+def bieu_do(chart):
+    st.altair_chart(chart, width="stretch")
+
+
+def chan_trang():
+    st.markdown('<div class="chan-trang">Đồ án môn Học máy · Nhóm 1 · YOLOv11n tinh chỉnh trên bộ dữ liệu PPE '
+                '(Roboflow, CC BY 4.0). Ảnh và video chỉ được xử lý tạm thời, không lưu lại.</div>',
+                unsafe_allow_html=True)
+
+
+def tong_hop_anh(anh, conf):
+    """Khi phân tích nhiều ảnh: số liệu tổng và biểu đồ trang bị bị thiếu trên toàn bộ ảnh."""
+    bao_cao = [r for r in (phan_tich_anh(d, conf)[0] for _, d in anh) if r is not None]
+    cong_nhan = sum(r["so_cong_nhan"] for r in bao_cao)
+    vi_pham = sum(r["so_nguoi_vi_pham"] for r in bao_cao)
+    dem = collections.Counter(ten for r in bao_cao for w in r["workers"] for ten, _ in w["thieu"])
+    with st.container(border=True):
+        muc("Tổng hợp", f"Kết quả trên {len(bao_cao)} ảnh")
+        chi_so(("Ảnh có vi phạm", f"{sum(r['canh_bao'] for r in bao_cao)}/{len(bao_cao)}"),
+               ("Công nhân", cong_nhan), ("Thiếu đồ bảo hộ", vi_pham),
+               ("Tỷ lệ tuân thủ", bd.phan_tram((cong_nhan - vi_pham) / cong_nhan, 0) if cong_nhan else "–"))
+        chart = bd.bd_trang_bi_thieu(dem, "Số công nhân thiếu")
+        if chart is not None:
+            st.markdown("**Trang bị bị thiếu nhiều nhất**")
+            bieu_do(chart)
+
+
+# ---------------------------------------------------------------------- trang 1: giám sát
+NGUON_ANH = {"tai_len": ":material/upload: Tải ảnh lên", "mau": ":material/photo_library: Ảnh mẫu"}
+CHE_DO_CAMERA = {"truc_tiep": ":material/sensors: Video trực tiếp", "tu_chup": ":material/photo_camera: Tự chụp mỗi giây"}
+
+
+def chuyen_sang_tu_chup():
+    st.session_state["che_do_camera"] = "tu_chup"
+
+
+def trang_giam_sat():
+    val = bd.DANH_GIA["val"]
+    hero("An toàn lao động · Thị giác máy tính", "Giám sát an toàn công trường",
+         "Mô hình YOLOv11n kiểm tra từng công nhân có đủ 4 trang bị bảo hộ bắt buộc và cảnh báo ngay khi thiếu, "
+         "trên ảnh, video và camera trực tiếp.",
+         [(bd.phan_tram(val["all"][2]), "mAP50 trên tập kiểm định"), ("9", "lớp đối tượng nhận diện"),
+          (f"{str(val['toc_do_ms']).replace('.', ',')} ms", "suy luận mỗi ảnh (GPU)"),
+          (so_vn(sum(bd.SO_ANH.values())), "ảnh huấn luyện và đánh giá")])
+
+    with st.sidebar:
+        st.subheader(":material/tune: Cài đặt nhận diện")
+        conf = st.slider("Ngưỡng tin cậy", 0.10, 0.90, float(core.CONF_THRESHOLD), 0.05,
+                         help="Thấp: phát hiện nhiều hơn nhưng dễ nhầm. Cao: chắc chắn hơn nhưng dễ bỏ sót.")
+        chu_ky = st.slider("Chu kỳ cảnh báo (giây)", 1, 10, 3,
+                           help="Khoảng cách tối thiểu giữa hai lần ghi cảnh báo trong video và camera.")
+        khung_moi_giay = st.slider("Số lần phân tích mỗi giây", 1, 10, 4,
+                                   help="Áp dụng cho video và camera. Càng cao càng chính xác nhưng càng chậm "
+                                        "(máy chủ miễn phí chỉ có CPU).")
+        st.divider()
+        st.subheader(":material/info: Cách đọc kết quả")
+        # Màu khung giống màu ve_ket_qua vẽ lên ảnh (GREEN, RED, BLUE của notebook, đổi từ BGR sang RGB)
+        st.markdown("""
 <ul class="chu-giai">
   <li><span class="o" style="border-color:#00aa00"></span>Công nhân đủ 4 trang bị</li>
   <li><span class="o" style="border-color:#ff0000"></span>Công nhân thiếu trang bị (ghi rõ món thiếu)</li>
@@ -634,117 +730,133 @@ with st.sidebar:
   <li><b class="ky-hieu">✔ ✘</b>Bảng công nhân: có / thiếu trang bị</li>
 </ul>
 """, unsafe_allow_html=True)
-    st.caption("Mô hình YOLOv11n tinh chỉnh trên bộ dữ liệu PPE (Roboflow, CC BY 4.0). "
-               "Không có lớp *no-gloves* nên thiếu găng tay được suy ra từ việc không phát hiện găng tay. "
-               "Ảnh và video chỉ được xử lý tạm thời, không lưu lại.")
+        st.caption("Không có lớp *no-gloves* nên thiếu găng tay được suy ra từ việc không phát hiện găng tay.")
 
-tab_anh, tab_video, tab_camera = st.tabs([":material/image: Ảnh", ":material/movie: Video",
-                                          ":material/videocam: Camera"])
+    tab_anh, tab_video, tab_camera = st.tabs([":material/image: Ảnh", ":material/movie: Video",
+                                              ":material/videocam: Camera"])
+    with tab_anh:
+        nguon = st.segmented_control("Nguồn ảnh", list(NGUON_ANH), format_func=NGUON_ANH.get, default="tai_len",
+                                     required=True, label_visibility="collapsed")
+        if nguon == "mau":
+            mau = sorted((APP_DIR / "vi_du").glob("*.jpg"))
+            nhan = {p.name: f"Mẫu {i}" for i, p in enumerate(mau, 1)}
+            chon = st.pills("Chọn ảnh mẫu", list(nhan), format_func=nhan.get, default=mau[0].name if mau else None,
+                            required=True)
+            anh = [(chon, (APP_DIR / "vi_du" / chon).read_bytes())] if chon else []
+        else:
+            tep = st.file_uploader("Kéo thả hoặc chọn một / nhiều ảnh công trường",
+                                   type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=True)
+            anh = [(f.name, f.getvalue()) for f in tep or []]
+        if not anh:
+            st.info("Chọn ảnh để bắt đầu (có thể chọn nhiều ảnh cùng lúc), hoặc chuyển sang **Ảnh mẫu** để xem thử.",
+                    icon=":material/add_photo_alternate:")
+        if len(anh) > 1:
+            with st.spinner(f"Đang phân tích {len(anh)} ảnh…"):
+                tong_hop_anh(anh, conf)
+        for i, (ten, du_lieu) in enumerate(anh):
+            with st.container(border=True):
+                with st.spinner(f"Đang phân tích {ten}…"):
+                    hien_thi_ket_qua_anh(ten, du_lieu, conf, f"a{i}")
 
-NGUON_ANH = {"tai_len": ":material/upload: Tải ảnh lên", "mau": ":material/photo_library: Ảnh mẫu"}
+    with tab_video:
+        tab_video_noi_dung(conf, chu_ky, khung_moi_giay)
 
-with tab_anh:
-    nguon = st.segmented_control("Nguồn ảnh", list(NGUON_ANH), format_func=NGUON_ANH.get, default="tai_len",
-                                 required=True, label_visibility="collapsed")
-    if nguon == "mau":
-        mau = sorted((APP_DIR / "vi_du").glob("*.jpg"))
-        nhan = {p.name: f"Mẫu {i}" for i, p in enumerate(mau, 1)}
-        chon = st.pills("Chọn ảnh mẫu", list(nhan), format_func=nhan.get, default=mau[0].name if mau else None,
-                        required=True)
-        anh = [(chon, (APP_DIR / "vi_du" / chon).read_bytes())] if chon else []
-    else:
-        tep = st.file_uploader("Kéo thả hoặc chọn một / nhiều ảnh công trường", type=["jpg", "jpeg", "png", "bmp", "webp"],
-                               accept_multiple_files=True)
-        anh = [(f.name, f.getvalue()) for f in tep or []]
-    if not anh:
-        st.info("Chọn ảnh để bắt đầu (có thể chọn nhiều ảnh cùng lúc), hoặc chuyển sang **Ảnh mẫu** để xem thử.",
-                icon=":material/add_photo_alternate:")
-    for i, (ten, du_lieu) in enumerate(anh):
-        with st.container(border=True):
-            with st.spinner(f"Đang phân tích {ten}…"):
-                hien_thi_ket_qua_anh(ten, du_lieu, conf, f"a{i}")
+    with tab_camera:
+        tab_camera_noi_dung(conf, chu_ky, khung_moi_giay)
+    chan_trang()
 
-with tab_video:
+
+def tab_video_noi_dung(conf, chu_ky, khung_moi_giay):
     tep_video = st.file_uploader("Chọn video công trường từ máy tính", type=["mp4", "avi", "mov", "mkv"])
     if tep_video is None:
-        st.info("Tải video lên để bắt đầu. Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm "
-                "và nhật ký cảnh báo.", icon=":material/video_file:")
-    else:
-        duoi = Path(tep_video.name).suffix.lower()
-        giay = thoi_luong_video(tep_video.file_id, duoi, tep_video.getvalue())
-        if giay:
-            # máy chủ miễn phí chỉ có CPU: khoảng 2–6 lần độ dài video khi phân tích 4 lần mỗi giây
-            he_so = khung_moi_giay / 4
-            it, nhieu = max(1, round(giay * 2 * he_so / 60)), max(1, round(giay * 6 * he_so / 60))
-            st.caption(f"Video dài **{dinh_dang_thoi_luong(giay)}**, được phân tích toàn bộ nên video kết quả dài "
-                       f"đúng bằng video gốc. Máy chủ miễn phí chỉ có CPU, ước tính mất khoảng **{it}–{nhieu} phút**. "
-                       "Đừng đổi cài đặt trong lúc phân tích vì trang sẽ chạy lại và dừng phân tích.")
-        if st.button("Phân tích video", type="primary", icon=":material/play_arrow:"):
-            thanh = st.progress(0.0, text="Đang chuẩn bị…")
-            kq = phan_tich_video(tep_video.getvalue(), tep_video.name, conf, chu_ky, khung_moi_giay, thanh)
-            thanh.empty()
-            if kq is None:
-                st.error("Không đọc được video. Hãy thử file .mp4 khác.", icon=":material/error:")
-            else:
-                kq["file_id"] = tep_video.file_id
-            st.session_state["video_kq"] = kq
+        st.info("Tải video lên để bắt đầu. Kết quả gồm video đã đánh dấu, biểu đồ diễn biến vi phạm, ảnh các "
+                "khoảnh khắc vi phạm và nhật ký cảnh báo.", icon=":material/video_file:")
+        return
+    duoi = Path(tep_video.name).suffix.lower()
+    giay = thoi_luong_video(tep_video.file_id, duoi, tep_video.getvalue())
+    if giay:
+        # máy chủ miễn phí chỉ có CPU: khoảng 2–6 lần độ dài video khi phân tích 4 lần mỗi giây
+        he_so = khung_moi_giay / 4
+        it, nhieu = max(1, round(giay * 2 * he_so / 60)), max(1, round(giay * 6 * he_so / 60))
+        st.caption(f"Video dài **{dinh_dang_thoi_luong(giay)}**, được phân tích toàn bộ nên video kết quả dài "
+                   f"đúng bằng video gốc. Máy chủ miễn phí chỉ có CPU, ước tính mất khoảng **{it}–{nhieu} phút**. "
+                   "Đừng đổi cài đặt trong lúc phân tích vì trang sẽ chạy lại và dừng phân tích.")
+    if st.button("Phân tích video", type="primary", icon=":material/play_arrow:"):
+        thanh = st.progress(0.0, text="Đang chuẩn bị…")
+        kq = phan_tich_video(tep_video.getvalue(), tep_video.name, conf, chu_ky, khung_moi_giay, thanh)
+        thanh.empty()
+        if kq is None:
+            st.error("Không đọc được video. Hãy thử file .mp4 khác.", icon=":material/error:")
+        else:
+            kq["file_id"] = tep_video.file_id
+        st.session_state["video_kq"] = kq
 
-        kq = st.session_state.get("video_kq")
-        if not kq or kq.get("file_id") != tep_video.file_id:
-            kq = None  # kết quả cũ thuộc video khác
-        goc, ket_qua = st.columns(2, gap="medium")
-        with goc:
-            st.markdown("**:material/movie: Video gốc**")
-            with st.container(key="video_goc"):
-                st.video(ban_xem_truoc(tep_video.file_id, duoi, tep_video.getvalue()))
-        with ket_qua:
-            st.markdown("**:material/verified_user: Video đã phân tích**")
-            if kq:
-                with st.container(key="video_ket_qua"):
-                    st.video(kq["video"], muted=True)  # không có tiếng; tiếng phát từ video gốc
-            else:
-                st.info("Bấm **Phân tích video** để xem video có đánh dấu công nhân và cảnh báo.",
-                        icon=":material/play_circle:")
-
+    kq = st.session_state.get("video_kq")
+    if not kq or kq.get("file_id") != tep_video.file_id:
+        kq = None  # kết quả cũ thuộc video khác
+    goc, ket_qua = st.columns(2, gap="medium")
+    with goc:
+        st.markdown("**:material/movie: Video gốc**")
+        with st.container(key="video_goc"):
+            st.video(ban_xem_truoc(tep_video.file_id, duoi, tep_video.getvalue()))
+    with ket_qua:
+        st.markdown("**:material/verified_user: Video đã phân tích**")
         if kq:
-            tao_dong_bo_video()(key="dong_bo_video", data={"lop": ["st-key-video_goc", "st-key-video_ket_qua"]})
-            st.caption("Hai video phát cùng lúc: bấm phát, tạm dừng hoặc tua ở một video thì video kia làm theo.")
-            with st.container(border=True):
-                mo_ta = f"{kq['vp_frames']}/{kq['frames']} khung hình có công nhân thiếu đồ bảo hộ"
-                if kq["vp_frames"]:
-                    the_trang_thai("do", "CÓ VI PHẠM", mo_ta)
-                else:
-                    the_trang_thai("xanh", "AN TOÀN", "Không khung hình nào có vi phạm")
-                chi_so(("Đã phân tích", dinh_dang_thoi_luong(kq["frames"] / kq["fps"])),
-                       ("Khung có vi phạm", f"{kq['vp_frames'] / kq['frames']:.0%}"),
-                       ("Lần cảnh báo", len({r[2] for r in kq["rows"]})),
-                       ("Lần chạy mô hình", kq["so_lan_chay"]))
-                if kq["tong"] and kq["frames"] < 0.98 * kq["tong"]:  # file hỏng giữa chừng
-                    st.caption(f"Chỉ đọc được {dinh_dang_thoi_luong(kq['frames'] / kq['fps'])} trong tổng "
-                               f"{dinh_dang_thoi_luong(kq['tong'] / kq['fps'])} của video.")
-                ten_goc = Path(kq["ten"]).stem
-                nut1, nut2 = st.columns(2)
-                nut1.download_button("Tải video kết quả", kq["video"], f"{ten_goc}_giam_sat.mp4", "video/mp4",
-                                     icon=":material/download:", width="stretch")
-                nut2.download_button("Tải nhật ký CSV", csv_nhat_ky(kq["rows"]), f"{ten_goc}_nhat_ky.csv",
-                                     "text/csv", disabled=not kq["rows"], icon=":material/table_view:",
-                                     width="stretch")
-            if kq["canh_bao"]:
-                st.subheader(":material/photo_camera: Khoảnh khắc vi phạm")
-                cot = st.columns(4)
-                for i, (jpg, chu_thich) in enumerate(kq["canh_bao"]):
-                    cot[i % 4].image(jpg, caption=chu_thich, width="stretch")
-                st.subheader(":material/history: Nhật ký cảnh báo")
-                st.dataframe(pd.DataFrame(kq["rows"], columns=COT_NHAT_KY), hide_index=True, width="stretch")
+            with st.container(key="video_ket_qua"):
+                st.video(kq["video"], muted=True)  # không có tiếng; tiếng phát từ video gốc
+        else:
+            st.info("Bấm **Phân tích video** để xem video có đánh dấu công nhân và cảnh báo.",
+                    icon=":material/play_circle:")
+    if not kq:
+        return
 
-CHE_DO_CAMERA = {"truc_tiep": ":material/sensors: Video trực tiếp", "tu_chup": ":material/photo_camera: Tự chụp mỗi giây"}
+    tao_dong_bo_video()(key="dong_bo_video", data={"lop": ["st-key-video_goc", "st-key-video_ket_qua"]})
+    st.caption("Hai video phát cùng lúc: bấm phát, tạm dừng hoặc tua ở một video thì video kia làm theo.")
+    with st.container(border=True):
+        mo_ta = f"{kq['vp_frames']}/{kq['frames']} khung hình có công nhân thiếu đồ bảo hộ"
+        if kq["vp_frames"]:
+            the_trang_thai("do", "CÓ VI PHẠM", mo_ta)
+        else:
+            the_trang_thai("xanh", "AN TOÀN", "Không khung hình nào có vi phạm")
+        chi_so(("Đã phân tích", dinh_dang_thoi_luong(kq["frames"] / kq["fps"])),
+               ("Khung có vi phạm", bd.phan_tram(kq["vp_frames"] / kq["frames"], 0)),
+               ("Lần cảnh báo", len({r[2] for r in kq["rows"]})),
+               ("Lần chạy mô hình", kq["so_lan_chay"]))
+        if kq["tong"] and kq["frames"] < 0.98 * kq["tong"]:  # file hỏng giữa chừng
+            st.caption(f"Chỉ đọc được {dinh_dang_thoi_luong(kq['frames'] / kq['fps'])} trong tổng "
+                       f"{dinh_dang_thoi_luong(kq['tong'] / kq['fps'])} của video.")
+        ten_goc = Path(kq["ten"]).stem
+        nut1, nut2 = st.columns(2)
+        nut1.download_button("Tải video kết quả", kq["video"], f"{ten_goc}_giam_sat.mp4", "video/mp4",
+                             icon=":material/download:", width="stretch")
+        nut2.download_button("Tải nhật ký CSV", csv_nhat_ky(kq["rows"]), f"{ten_goc}_nhat_ky.csv",
+                             "text/csv", disabled=not kq["rows"], icon=":material/table_view:", width="stretch")
+
+    if kq.get("dien_bien"):
+        muc("Phân tích", "Diễn biến trong video",
+            "Gộp theo từng giây, lấy số lớn nhất trong giây đó. Rê chuột lên biểu đồ để xem số liệu từng giây.")
+        trai, phai = st.columns([3, 2], gap="medium")
+        with trai, st.container(border=True):
+            st.markdown("**Công nhân và người thiếu đồ bảo hộ theo từng giây**")
+            bieu_do(bd.bd_dien_bien(kq["dien_bien"]))
+        with phai, st.container(border=True):
+            st.markdown("**Trang bị bị thiếu nhiều nhất**")
+            chart = bd.bd_trang_bi_thieu(kq.get("dem_thieu", {}), "Lượt công nhân thiếu")
+            if chart is None:
+                st.success("Không có công nhân nào thiếu trang bị.", icon=":material/verified:")
+            else:
+                bieu_do(chart)
+                st.caption("Đếm theo lượt: một công nhân thiếu trong một lần chạy mô hình tính là một lượt.")
+    if kq["canh_bao"]:
+        muc("Bằng chứng", "Khoảnh khắc vi phạm", "Ảnh chụp tại mỗi lần cảnh báo (tối đa 12 ảnh).")
+        cot = st.columns(4)
+        for i, (jpg, chu_thich) in enumerate(kq["canh_bao"]):
+            cot[i % 4].image(jpg, caption=chu_thich, width="stretch")
+        muc("Nhật ký", "Nhật ký cảnh báo")
+        st.dataframe(pd.DataFrame(kq["rows"], columns=COT_NHAT_KY), hide_index=True, width="stretch")
 
 
-def chuyen_sang_tu_chup():
-    st.session_state["che_do_camera"] = "tu_chup"
-
-
-with tab_camera:
+def tab_camera_noi_dung(conf, chu_ky, khung_moi_giay):
     gs = st.session_state.setdefault("giam_sat_camera", GiamSatCamera())
     gs.conf, gs.chu_ky, gs.tan_suat = conf, chu_ky, khung_moi_giay
 
@@ -797,3 +909,113 @@ with tab_camera:
     st.info("**Cần hình mượt nhất khi demo trước lớp?** Dùng app desktop trên laptop có GPU: "
             "`.venv\\Scripts\\python.exe giao_dien.py` → chế độ **Camera** (khoảng 28 khung hình/giây, "
             "có tạm dừng, âm thanh cảnh báo và lưu nhật ký).", icon=":material/lightbulb:")
+
+
+# ---------------------------------------------------------------------- trang 2: hiệu năng mô hình
+ANH_ULTRALYTICS = {
+    "confusion_matrix_normalized.png": ("Ma trận nhầm lẫn",
+                                        "Tỷ lệ dự đoán (cột) cho mỗi lớp thật (hàng), đã chuẩn hóa. Đường chéo "
+                                        "càng đậm càng tốt; ô ngoài đường chéo là nhầm lẫn giữa hai lớp."),
+    "BoxPR_curve.png": ("Đường Precision–Recall",
+                        "Diện tích dưới mỗi đường là AP của lớp đó; mAP50 là trung bình của 9 lớp."),
+    "BoxF1_curve.png": ("Đường F1 theo ngưỡng tin cậy",
+                        "Đỉnh của đường tổng cho biết ngưỡng tin cậy cân bằng Precision và Recall tốt nhất."),
+    "BoxP_curve.png": ("Precision theo ngưỡng", "Precision của từng lớp khi tăng ngưỡng tin cậy."),
+    "BoxR_curve.png": ("Recall theo ngưỡng", "Recall của từng lớp khi tăng ngưỡng tin cậy."),
+}
+
+
+def trang_mo_hinh():
+    df = bd.doc_ket_qua_huan_luyen()
+    test = bd.DANH_GIA["test"]
+    hero("Đánh giá mô hình · YOLOv11n", "Hiệu năng mô hình",
+         "Kết quả huấn luyện 50 epoch và đánh giá trên hai tập dữ liệu chưa dùng để huấn luyện: "
+         "tập kiểm định (val) và tập kiểm tra (test).",
+         [(bd.phan_tram(test["all"][2]), "mAP50 trên tập kiểm tra"),
+          (bd.phan_tram(test["all"][3]), "mAP50-95 trên tập kiểm tra"),
+          (f"{round(df['time'].iloc[-1] / 60)} phút", "thời gian huấn luyện"),
+          (so_vn(bd.DANH_GIA["val"]["doi_tuong"] + test["doi_tuong"]), "đối tượng dùng để đánh giá")])
+
+    tap = st.segmented_control("Tập đánh giá", list(bd.TEN_TAP), format_func=bd.TEN_TAP.get, default="test",
+                               required=True, key="tap_danh_gia")
+    khac = "val" if tap == "test" else "test"
+    so, so_khac = bd.DANH_GIA[tap], bd.DANH_GIA[khac]
+    with st.container(horizontal=True, gap="small"):
+        for i, ten in enumerate(bd.CHI_SO):
+            chenh = (so["all"][i] - so_khac["all"][i]) * 100
+            # mũi tên của st.metric đã cho biết cao hơn hay thấp hơn, nên chỉ ghi độ lớn
+            st.metric(ten, bd.phan_tram(so["all"][i]), delta=f"{abs(chenh):.1f} điểm so với {khac}".replace(".", ",")
+                      if chenh >= 0 else f"-{abs(chenh):.1f} điểm so với {khac}".replace(".", ","),
+                      delta_color="off", border=True, width="stretch")
+    st.caption(f"{so_vn(so['anh'])} ảnh, {so_vn(so['doi_tuong'])} đối tượng gắn nhãn · tốc độ suy luận "
+               f"{str(so['toc_do_ms']).replace('.', ',')} ms/ảnh trên RTX 3050.")
+
+    # --- theo từng lớp
+    muc("Theo từng lớp", "Hiệu năng của 9 lớp đối tượng",
+        "So sánh tập kiểm định và tập kiểm tra. Lớp có đánh dấu ✔ trong bảng là trang bị bắt buộc.")
+    chi_so_chon = st.pills("Chỉ số", list(bd.CHI_SO), default="mAP50", required=True, key="chi_so_lop")
+    i = bd.CHI_SO.index(chi_so_chon)
+    xep = sorted(bd.DANH_GIA[tap]["lop"].items(), key=lambda kv: kv[1][i])
+    yeu = [f"<b>{bd.TEN_LOP[lop]}</b> ({bd.phan_tram(v[i])})" for lop, v in xep[:2]]
+    manh = xep[-1]
+    nhan_xet(f"Trên tập {bd.TEN_TAP[tap].lower()}, lớp tốt nhất theo {chi_so_chon} là <b>{bd.TEN_LOP[manh[0]]}</b> "
+             f"({bd.phan_tram(manh[1][i])}); yếu nhất là {yeu[0]} và {yeu[1]}. Găng tay và giày là vật nhỏ, hay bị "
+             "che khuất nên khó nhận diện hơn; lớp <i>no-boot</i> lại có rất ít mẫu huấn luyện (461 đối tượng).")
+    with st.container(border=True):
+        bieu_do(bd.bd_theo_lop(chi_so_chon))
+    with st.expander("Xem bảng số liệu theo lớp", icon=":material/table_view:"):
+        st.dataframe(bd.bang_danh_gia(tap).style.format({c: "{:.3f}" for c in bd.CHI_SO}), hide_index=True,
+                     width="stretch")
+
+    trai, phai = st.columns(2, gap="medium")
+    with trai:
+        muc("Tổng quan", "Bản đồ nhiệt lớp × chỉ số", f"Tập {bd.TEN_TAP[tap].lower()}, xếp theo mAP50.")
+        with st.container(border=True):
+            bieu_do(bd.bd_nhiet(tap))
+    with phai:
+        muc("Dữ liệu", "Phân bố đối tượng gắn nhãn",
+            f"{so_vn(sum(bd.SO_ANH.values()))} ảnh từ Roboflow, chia thành ba tập.")
+        with st.container(border=True):
+            bieu_do(bd.bd_phan_bo())
+        st.caption("Lớp *no-boot* chỉ có 651 đối tượng, ít hơn khoảng 25 lần so với *Person*: dữ liệu mất cân bằng.")
+
+    # --- quá trình huấn luyện
+    muc("Huấn luyện", "Quá trình huấn luyện qua 50 epoch",
+        "Chỉ số đo trên tập kiểm định sau mỗi epoch. Rê chuột lên biểu đồ để xem giá trị của từng epoch.")
+    trai, phai = st.columns(2, gap="medium")
+    with trai, st.container(border=True):
+        st.markdown("**Precision, Recall và mAP**")
+        bieu_do(bd.bd_huan_luyen(df))
+    with phai, st.container(border=True):
+        loai = st.segmented_control("Hàm mất mát", ["box", "cls", "dfl"], default="box", required=True,
+                                    key="loai_loss",
+                                    format_func={"box": "Box (vị trí)", "cls": "Cls (phân lớp)",
+                                                 "dfl": "DFL (biên hộp)"}.get)
+        bieu_do(bd.bd_mat_mat(df, loai))
+    tot_nhat = df.loc[df["metrics/mAP50(B)"].idxmax()]
+    with st.container(horizontal=True, gap="small"):
+        for nhan, gia_tri in [*bd.CAU_HINH_HUAN_LUYEN.items(),
+                              (f"mAP50 cao nhất (epoch {int(tot_nhat['epoch'])})",
+                               bd.phan_tram(tot_nhat["metrics/mAP50(B)"]))]:
+            st.metric(nhan, gia_tri, border=True, width="stretch")
+
+    # --- biểu đồ gốc
+    muc("Ultralytics", "Biểu đồ đánh giá gốc",
+        f"Do Ultralytics tạo ra khi chạy <code>model.val()</code> trên tập {bd.TEN_TAP[tap].lower()}.")
+    tabs = st.tabs([ten for ten, _ in ANH_ULTRALYTICS.values()] + ["Kết quả huấn luyện"])
+    for t, (tep, (_, giai_thich)) in zip(tabs, ANH_ULTRALYTICS.items()):
+        with t:
+            st.caption(giai_thich)
+            st.image(str(bd.THU_MUC / tap / tep), width="stretch")
+    with tabs[-1]:
+        st.caption("Tổng hợp loss và chỉ số theo epoch do Ultralytics vẽ (results.png).")
+        st.image(str(bd.THU_MUC / "results.png"), width="stretch")
+    chan_trang()
+
+
+st.markdown(CSS, unsafe_allow_html=True)
+trang = st.navigation([
+    st.Page(trang_giam_sat, title="Giám sát", icon=":material/videocam:", url_path="giam-sat", default=True),
+    st.Page(trang_mo_hinh, title="Hiệu năng mô hình", icon=":material/monitoring:", url_path="hieu-nang-mo-hinh"),
+], position="top")
+trang.run()
