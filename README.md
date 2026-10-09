@@ -9,7 +9,7 @@ Bản web này chạy trên [Streamlit Community Cloud](https://streamlit.io/clo
 | Tab | Mô tả |
 |---|---|
 | 🖼️ Ảnh | Tải một hoặc nhiều ảnh (hoặc chọn ảnh mẫu). Kết quả gồm ảnh đã đánh dấu, trạng thái AN TOÀN / CẢNH BÁO, bảng ✔/✘ cho từng công nhân, nút tải ảnh kết quả và nhật ký CSV |
-| 🎞️ Video | Xem video gốc cạnh video đã phân tích (30 giây đầu). Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
+| 🎞️ Video | Phân tích toàn bộ video, nên video kết quả dài đúng bằng video gốc. Hai video đặt cạnh nhau và phát cùng lúc (phát, tạm dừng, tua ở một bên thì bên kia làm theo). Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm và nhật ký cảnh báo |
 | 📷 Camera | **Video trực tiếp** qua WebRTC (mặc định). Nếu mạng chặn WebRTC thì dùng **Tự chụp mỗi giây**. Bảng trạng thái, ảnh cảnh báo gần nhất và nhật ký tự cập nhật |
 
 ### Khi chế độ Video trực tiếp không lên hình

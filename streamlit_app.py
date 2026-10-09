@@ -10,6 +10,7 @@ import base64
 import csv
 import io
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -29,7 +30,6 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 APP_DIR = Path(__file__).resolve().parent
 os.chdir(APP_DIR)  # notebook dùng PROJECT_DIR = Path.cwd(); trọng số ở runs/detect/train/weights/best.pt
 
-GIAY_VIDEO_TOI_DA = 30   # máy chủ miễn phí chỉ có CPU yếu nên giới hạn độ dài video
 CANH_TOI_DA = 960        # thu nhỏ khung hình video lớn hơn mức này
 SO_ANH_CANH_BAO_TOI_DA = 12
 COT_CONG_NHAN = ["CN", "Mũ", "Găng", "Áo", "Giày", "Kết luận"]
@@ -246,10 +246,84 @@ def ban_xem_truoc(file_id, duoi, _du_lieu):
     return ra.read_bytes()
 
 
+@st.cache_data(max_entries=8, show_spinner=False)
+def thoi_luong_video(file_id, duoi, _du_lieu):
+    """Độ dài video (giây) đọc từ số khung hình / fps; 0 nếu không đọc được."""
+    thu_muc = Path(tempfile.mkdtemp())
+    try:
+        vao = thu_muc / f"goc{duoi}"
+        vao.write_bytes(_du_lieu)
+        cap = cv2.VideoCapture(str(vao))
+        fps, tong = cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        cap.release()
+        return tong / fps if fps and 0 < fps <= 120 and tong > 0 else 0
+    finally:
+        shutil.rmtree(thu_muc, ignore_errors=True)
+
+
+# Phát hai video cùng lúc: tìm thẻ <video> trong hai container (class st-key-…) và nối các sự kiện phát / dừng /
+# tua / đổi tốc độ của video này sang video kia. Component v2 chạy ngay trong trang (không nằm trong iframe) nên
+# truy cập được các st.video. Video gốc làm mốc: khi đang phát mà lệch quá 0,3 giây thì kéo video kết quả về khớp.
+DONG_BO_VIDEO_JS = """
+export default function(component) {
+    const [lopGoc, lopKetQua] = component.data.lop;
+    let goc = null, ketQua = null, huy = null;
+
+    const noi = (nguon, dich, signal) => {
+        const khop = () => {
+            if (Math.abs(dich.currentTime - nguon.currentTime) > 0.1) dich.currentTime = nguon.currentTime;
+        };
+        nguon.addEventListener('play', () => { khop(); if (dich.paused) dich.play().catch(() => {}); }, { signal });
+        nguon.addEventListener('pause', () => { if (!dich.paused && !nguon.ended) dich.pause(); }, { signal });
+        nguon.addEventListener('seeking', khop, { signal });
+        nguon.addEventListener('ratechange', () => {
+            if (dich.playbackRate !== nguon.playbackRate) dich.playbackRate = nguon.playbackRate;
+        }, { signal });
+    };
+
+    const kiemTra = () => {
+        const a = document.querySelector(`.${lopGoc} video`);
+        const b = document.querySelector(`.${lopKetQua} video`);
+        if (!a || !b) return;
+        if (a !== goc || b !== ketQua) {  // lần đầu, hoặc Streamlit vừa vẽ lại thẻ video
+            if (huy) huy.abort();
+            huy = new AbortController();
+            goc = a; ketQua = b;
+            noi(goc, ketQua, huy.signal);
+            noi(ketQua, goc, huy.signal);
+        } else if (!goc.paused && !ketQua.paused && Math.abs(goc.currentTime - ketQua.currentTime) > 0.3) {
+            ketQua.currentTime = goc.currentTime;
+        }
+    };
+    kiemTra();
+    const hen = setInterval(kiemTra, 500);
+    return () => { clearInterval(hen); if (huy) huy.abort(); };
+}
+"""
+
+
+@st.cache_resource
+def tao_dong_bo_video():
+    return st.components.v2.component("dong_bo_video", html="<span></span>", js=DONG_BO_VIDEO_JS)
+
+
+def dinh_dang_thoi_luong(giay):
+    phut, giay = divmod(round(giay), 60)
+    return f"{phut} phút {giay:02d} giây" if phut else f"{giay} giây"
+
+
 def phan_tich_video(du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
-    """Giống giam_sat_video của notebook. Để kịp trên CPU, chỉ chạy mô hình `khung_moi_giay` lần mỗi giây;
+    """Giống giam_sat_video của notebook. Phân tích toàn bộ video và ghi đủ mọi khung hình với cùng fps, nên video
+    kết quả dài đúng bằng video gốc. Để kịp trên CPU, chỉ chạy mô hình `khung_moi_giay` lần mỗi giây;
     các khung ở giữa vẽ lại kết quả gần nhất nên video vẫn mượt."""
     thu_muc = Path(tempfile.mkdtemp())
+    try:
+        return _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do)
+    finally:
+        shutil.rmtree(thu_muc, ignore_errors=True)  # video dài để lại file tạm lớn trên máy chủ
+
+
+def _phan_tich_video(thu_muc, du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
     vao, tam, ra = thu_muc / f"vao{Path(ten).suffix or '.mp4'}", thu_muc / "tam.mp4", thu_muc / "ra.mp4"
     vao.write_bytes(du_lieu)
 
@@ -257,15 +331,14 @@ def phan_tich_video(du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     if fps > 120:
         fps = 30.0
-    tong = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    so_khung = min(tong, int(fps * GIAY_VIDEO_TOI_DA)) if tong > 0 else int(fps * GIAY_VIDEO_TOI_DA)
+    tong = max(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 0)  # chỉ để hiện tiến độ; vẫn đọc đến khung cuối cùng
     buoc = max(1, round(fps / khung_moi_giay))
 
     writer, report = None, None
     frames, vp_frames, so_lan_chay, last_alert = 0, 0, 0, float("-inf")
     canh_bao, rows = [], []
     try:
-        while frames < so_khung:
+        while True:
             ok, frame = cap.read()
             if not ok:
                 break
@@ -290,8 +363,9 @@ def phan_tich_video(du_lieu, ten, conf, chu_ky, khung_moi_giay, thanh_tien_do):
             writer.write(annotated)
             frames += 1
             if frames % 10 == 0:
-                thanh_tien_do.progress(min(frames / so_khung, 1.0) * 0.95,
-                                       text=f"Đang phân tích… {thoi_diem:.1f}s / {so_khung / fps:.1f}s")
+                thanh_tien_do.progress(min(frames / tong, 1.0) * 0.95 if tong else 0.5,
+                                       text=f"Đang phân tích… {thoi_diem:.1f}s / {tong / fps:.1f}s" if tong
+                                       else f"Đang phân tích… {thoi_diem:.1f}s")
     finally:
         cap.release()
         if writer is not None:
@@ -592,12 +666,19 @@ with tab_anh:
 
 with tab_video:
     tep_video = st.file_uploader("Chọn video công trường từ máy tính", type=["mp4", "avi", "mov", "mkv"])
-    st.caption(f"Máy chủ miễn phí chỉ có CPU nên chỉ phân tích **{GIAY_VIDEO_TOI_DA} giây đầu** của video. "
-               "Video 30 giây mất khoảng 1–3 phút.")
     if tep_video is None:
         st.info("Tải video lên để bắt đầu. Kết quả gồm video đã đánh dấu, ảnh các khoảnh khắc vi phạm "
                 "và nhật ký cảnh báo.", icon=":material/video_file:")
     else:
+        duoi = Path(tep_video.name).suffix.lower()
+        giay = thoi_luong_video(tep_video.file_id, duoi, tep_video.getvalue())
+        if giay:
+            # máy chủ miễn phí chỉ có CPU: khoảng 2–6 lần độ dài video khi phân tích 4 lần mỗi giây
+            he_so = khung_moi_giay / 4
+            it, nhieu = max(1, round(giay * 2 * he_so / 60)), max(1, round(giay * 6 * he_so / 60))
+            st.caption(f"Video dài **{dinh_dang_thoi_luong(giay)}**, được phân tích toàn bộ nên video kết quả dài "
+                       f"đúng bằng video gốc. Máy chủ miễn phí chỉ có CPU, ước tính mất khoảng **{it}–{nhieu} phút**. "
+                       "Đừng đổi cài đặt trong lúc phân tích vì trang sẽ chạy lại và dừng phân tích.")
         if st.button("Phân tích video", type="primary", icon=":material/play_arrow:"):
             thanh = st.progress(0.0, text="Đang chuẩn bị…")
             kq = phan_tich_video(tep_video.getvalue(), tep_video.name, conf, chu_ky, khung_moi_giay, thanh)
@@ -614,29 +695,33 @@ with tab_video:
         goc, ket_qua = st.columns(2, gap="medium")
         with goc:
             st.markdown("**:material/movie: Video gốc**")
-            st.video(ban_xem_truoc(tep_video.file_id, Path(tep_video.name).suffix.lower(), tep_video.getvalue()))
+            with st.container(key="video_goc"):
+                st.video(ban_xem_truoc(tep_video.file_id, duoi, tep_video.getvalue()))
         with ket_qua:
             st.markdown("**:material/verified_user: Video đã phân tích**")
             if kq:
-                st.video(kq["video"])
+                with st.container(key="video_ket_qua"):
+                    st.video(kq["video"], muted=True)  # không có tiếng; tiếng phát từ video gốc
             else:
                 st.info("Bấm **Phân tích video** để xem video có đánh dấu công nhân và cảnh báo.",
                         icon=":material/play_circle:")
 
         if kq:
+            tao_dong_bo_video()(key="dong_bo_video", data={"lop": ["st-key-video_goc", "st-key-video_ket_qua"]})
+            st.caption("Hai video phát cùng lúc: bấm phát, tạm dừng hoặc tua ở một video thì video kia làm theo.")
             with st.container(border=True):
                 mo_ta = f"{kq['vp_frames']}/{kq['frames']} khung hình có công nhân thiếu đồ bảo hộ"
                 if kq["vp_frames"]:
                     the_trang_thai("do", "CÓ VI PHẠM", mo_ta)
                 else:
                     the_trang_thai("xanh", "AN TOÀN", "Không khung hình nào có vi phạm")
-                chi_so(("Đã phân tích", f"{kq['frames'] / kq['fps']:.0f} giây"),
+                chi_so(("Đã phân tích", dinh_dang_thoi_luong(kq["frames"] / kq["fps"])),
                        ("Khung có vi phạm", f"{kq['vp_frames'] / kq['frames']:.0%}"),
                        ("Lần cảnh báo", len({r[2] for r in kq["rows"]})),
                        ("Lần chạy mô hình", kq["so_lan_chay"]))
-                if kq["tong"] > kq["frames"]:
-                    st.caption(f"Đã phân tích {kq['frames'] / kq['fps']:.0f} giây đầu trong tổng "
-                               f"{kq['tong'] / kq['fps']:.0f} giây.")
+                if kq["tong"] and kq["frames"] < 0.98 * kq["tong"]:  # file hỏng giữa chừng
+                    st.caption(f"Chỉ đọc được {dinh_dang_thoi_luong(kq['frames'] / kq['fps'])} trong tổng "
+                               f"{dinh_dang_thoi_luong(kq['tong'] / kq['fps'])} của video.")
                 ten_goc = Path(kq["ten"]).stem
                 nut1, nut2 = st.columns(2)
                 nut1.download_button("Tải video kết quả", kq["video"], f"{ten_goc}_giam_sat.mp4", "video/mp4",
