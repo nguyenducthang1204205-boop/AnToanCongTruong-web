@@ -14,10 +14,21 @@ Bản web này chạy trên [Streamlit Community Cloud](https://streamlit.io/clo
 
 ### Khi chế độ Video trực tiếp không lên hình
 
-Chế độ này dùng máy chủ STUN miễn phí của Google. Một số mạng (wifi trường, công ty) chặn WebRTC. Khi đó có hai cách:
+Trên Streamlit Community Cloud, WebRTC chỉ dùng STUN thường **không truyền được hình**, nên cần thêm máy chủ chuyển tiếp **TURN**. App sẽ tự hiện cảnh báo nếu sau khoảng 8 giây máy chủ chưa nhận được hình nào. Cách thêm TURN (chọn một), vào **Manage app → Settings → Secrets** rồi bấm **Save**:
 
-1. Bấm **"Không lên hình? Chuyển sang chế độ tự chụp mỗi giây"**. Chế độ này chạy qua kết nối web thường.
-2. Thêm máy chủ TURN miễn phí (ví dụ [Metered](https://www.metered.ca/stun-turn)) vào **Settings → Secrets** của app trên Streamlit Cloud:
+- **Hugging Face (miễn phí 10 GB/tháng, dễ nhất):** tạo token loại *Read* ở https://huggingface.co/settings/tokens, rồi thêm dòng:
+  ```toml
+  HF_TOKEN = "hf_xxxxxxxxxxxxxxxx"
+  ```
+- **Cloudflare Realtime TURN (miễn phí 1000 GB/tháng):** trong Cloudflare Dashboard → *Realtime* → *TURN Server* → tạo khóa, rồi thêm:
+  ```toml
+  CLOUDFLARE_TURN_KEY_ID = "..."
+  CLOUDFLARE_TURN_KEY_API_TOKEN = "..."
+  ```
+
+Nếu chưa thêm được TURN, bấm **"Không lên hình? Chuyển sang chế độ tự chụp mỗi giây"**. Chế độ này chạy qua kết nối web thường.
+
+Cũng có thể tự khai báo danh sách STUN/TURN bất kỳ (ví dụ [Metered](https://www.metered.ca/stun-turn)):
 
 ```toml
 [[ice_servers]]

@@ -50,6 +50,11 @@ def nap_logic_notebook():
     core.__file__ = str(APP_DIR / "notebook_code.py")
     for so in (1, 5):
         exec(compile(cells[so], f"notebook_code.py (cell {so})", "exec"), core.__dict__)
+    import torch
+    if not torch.cuda.is_available():
+        # Máy chủ miễn phí chỉ được khoảng 1–2 lõi nhưng PyTorch thấy toàn bộ lõi của máy thật và tạo quá nhiều
+        # luồng; giới hạn lại để còn CPU cho bộ mã hóa video WebRTC.
+        torch.set_num_threads(2)
     return core, threading.Lock()  # khóa: nhiều phiên dùng chung một mô hình
 
 
@@ -265,6 +270,7 @@ class GiamSatCamera:
         self.report, self.jpg_ket_qua = None, None
         self.lan_chay_cuoi, self.canh_bao_cuoi, self.ms_phan_tich = 0.0, float("-inf"), 0.0
         self.so_khung, self.so_khung_vp = 0, 0
+        self.so_khung_webrtc = 0  # số khung hình máy chủ nhận được qua WebRTC (để chẩn đoán kết nối)
         self.nhat_ky, self.anh_canh_bao = [], []
 
     def ghi_nhan(self, report, annotated, nguon, ms):
@@ -289,6 +295,7 @@ class GiamSatCamera:
 
     def xu_ly_khung_webrtc(self, frame):
         """Chế độ A: chỉ chạy mô hình `tan_suat` lần mỗi giây, các khung ở giữa vẽ lại kết quả gần nhất."""
+        self.so_khung_webrtc += 1
         bgr = gioi_han_kich_thuoc(frame.to_ndarray(format="bgr24"), 640)
         now = time.monotonic()
         if self.report is None or now - self.lan_chay_cuoi >= 1 / self.tan_suat:
@@ -327,20 +334,47 @@ def hien_thi_trang_thai_camera(gs):
 
 
 @st.fragment(run_every=1.0)
-def bang_trang_thai_truc_tiep(gs):
-    """Chế độ A: luồng WebRTC chạy ngầm, bảng trạng thái tự làm mới mỗi giây."""
+def bang_trang_thai_truc_tiep(gs, bat_dau):
+    """Chế độ A: luồng WebRTC chạy ngầm, bảng trạng thái tự làm mới mỗi giây.
+    Nếu đã bấm Bắt đầu một lúc mà máy chủ chưa nhận được khung hình nào thì kết nối WebRTC không thông."""
+    cho = time.time() - bat_dau
+    if gs.so_khung_webrtc == 0 and cho > 8:
+        st.warning(f"**Đã {cho:.0f} giây mà máy chủ chưa nhận được hình từ camera.** "
+                   "Kết nối WebRTC không thông được. Thường do chưa cấu hình máy chủ chuyển tiếp TURN "
+                   f"(hiện đang dùng: {nguon_ice()}) hoặc mạng chặn WebRTC. "
+                   "Xem cách thêm TURN miễn phí ở README, hoặc dùng chế độ tự chụp.")
+        if st.button("📸 Chuyển sang chế độ tự chụp mỗi giây", key="chuyen_b_canh_bao", type="primary",
+                     on_click=chuyen_sang_tu_chup):
+            st.rerun()  # nút nằm trong fragment: chạy lại cả trang để đổi chế độ
+        return
     hien_thi_trang_thai_camera(gs)
 
 
-def may_chu_ice():
-    """STUN miễn phí của Google; nếu mạng chặn, thêm máy chủ TURN vào Secrets của Streamlit (khóa ice_servers)."""
+def bi_mat(khoa):
     try:
-        tu_secrets = st.secrets.get("ice_servers")
+        return st.secrets.get(khoa)
     except Exception:  # chưa có file secrets
-        tu_secrets = None
-    if tu_secrets:
-        return [dict(s) for s in tu_secrets]
-    return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
+        return None
+
+
+def may_chu_ice():
+    """Danh sách STUN/TURN khai báo tay trong Secrets (khóa ice_servers), hoặc None để streamlit-webrtc tự lấy:
+    TURN của Cloudflare / Twilio / Hugging Face nếu có biến môi trường tương ứng (Streamlit Cloud đưa các khóa
+    cấp gốc của Secrets thành biến môi trường), nếu không thì chỉ STUN của Google."""
+    tu_secrets = bi_mat("ice_servers")
+    return [dict(s) for s in tu_secrets] if tu_secrets else None
+
+
+def nguon_ice():
+    if bi_mat("ice_servers"):
+        return "máy chủ TURN tự khai báo"
+    if os.getenv("CLOUDFLARE_TURN_KEY_ID") and os.getenv("CLOUDFLARE_TURN_KEY_API_TOKEN"):
+        return "TURN của Cloudflare"
+    if os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN"):
+        return "TURN của Twilio"
+    if os.getenv("HF_TOKEN"):
+        return "TURN của Hugging Face"
+    return "chỉ STUN của Google, chưa có TURN"
 
 
 CAMERA_TU_CHUP_HTML = """
@@ -549,10 +583,11 @@ with tab_camera:
         st.caption("Bấm **▶ Bắt đầu giám sát** rồi cho phép dùng camera. Video được gửi lên máy chủ qua WebRTC, "
                    f"mô hình chạy khoảng {khung_moi_giay} lần/giây (chỉnh ở thanh bên trái).")
         trai, phai = st.columns([1, 1], gap="medium")
+        ice = may_chu_ice()
         with trai:
             ctx = webrtc_streamer(
                 key="camera_truc_tiep", mode=WebRtcMode.SENDRECV,
-                rtc_configuration={"iceServers": may_chu_ice()},
+                rtc_configuration={"iceServers": ice} if ice else None,
                 video_frame_callback=gs.xu_ly_khung_webrtc,
                 media_stream_constraints={"video": {"width": {"ideal": 640}, "height": {"ideal": 480},
                                                     "frameRate": {"ideal": 15, "max": 20}}, "audio": False},
@@ -561,12 +596,16 @@ with tab_camera:
                                   "controls": False, "muted": True})
             st.button("🔁 Không lên hình? Chuyển sang chế độ tự chụp mỗi giây", on_click=chuyen_sang_tu_chup,
                       width="stretch")
-            st.caption("Nếu bấm Bắt đầu mà quay mãi không lên hình, nhiều khả năng mạng (wifi trường, công ty) "
-                       "đang chặn WebRTC. Chế độ tự chụp chạy được trên mọi mạng.")
+            st.caption(f"Máy chủ kết nối: **{nguon_ice()}**. Nếu bấm Bắt đầu mà không lên hình, cần thêm máy chủ "
+                       "TURN (xem README) hoặc dùng chế độ tự chụp, chạy được trên mọi mạng.")
         with phai:
             if ctx.state.playing:
-                bang_trang_thai_truc_tiep(gs)
+                if "webrtc_bat_dau" not in st.session_state:  # vừa bấm Bắt đầu
+                    st.session_state["webrtc_bat_dau"] = time.time()
+                    gs.so_khung_webrtc = 0
+                bang_trang_thai_truc_tiep(gs, st.session_state["webrtc_bat_dau"])
             else:
+                st.session_state.pop("webrtc_bat_dau", None)
                 hien_thi_trang_thai_camera(gs)
     else:
         st.caption("Trình duyệt tự chụp webcam **mỗi giây** và gửi lên phân tích qua kết nối web thường, "
