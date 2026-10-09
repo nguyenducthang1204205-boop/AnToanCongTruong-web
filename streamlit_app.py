@@ -9,6 +9,7 @@ Chạy thử trên máy (từ thư mục dự án):
 import base64
 import collections
 import csv
+import importlib
 import io
 import os
 import shutil
@@ -29,6 +30,10 @@ import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 import bieu_do as bd
+
+# Community Cloud chạy lại script chính khi repo có commit mới nhưng giữ module đã import trong bộ nhớ, nên
+# bieu_do (số liệu mô hình) cũ đi kèm streamlit_app.py mới. Nạp lại mỗi lần chạy: module nhỏ, gần như không tốn gì.
+bd = importlib.reload(bd)
 
 APP_DIR = Path(__file__).resolve().parent
 os.chdir(APP_DIR)  # notebook dùng PROJECT_DIR = Path.cwd(); trọng số ở runs/detect/train/weights/best.pt
