@@ -1,5 +1,43 @@
+# Giao diện: xám công nghiệp + cam an toàn, font Be Vietnam Pro (hiển thị đủ dấu tiếng Việt).
+# Người xem tự chọn sáng / tối trong menu Settings; mặc định theo hệ điều hành.
 [theme]
-primaryColor = "#2563eb"
+font = "Be Vietnam Pro:https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap"
+baseRadius = "10px"
+showWidgetBorder = true
+metricValueFontSize = "1.6rem"
+metricValueFontWeight = 700
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+headingFontSizes = ["1.75rem", "1.5rem", "1.3rem"]
+
+[theme.light]
+primaryColor = "#C2410C"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EEF2F6"
+textColor = "#0F172A"
+borderColor = "#D5DCE5"
+linkColor = "#C2410C"
+redColor = "#DC2626"
+greenColor = "#15803D"
+dataframeHeaderBackgroundColor = "#EEF2F6"
+
+[theme.light.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F5F9"
+
+[theme.dark]
+primaryColor = "#EA580C"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#172235"
+textColor = "#E2E8F0"
+borderColor = "#2A3A52"
+linkColor = "#FB923C"
+redColor = "#F87171"
+greenColor = "#4ADE80"
+dataframeHeaderBackgroundColor = "#172235"
+
+[theme.dark.sidebar]
+backgroundColor = "#0F1829"
+secondaryBackgroundColor = "#1A273C"
 
 [server]
 maxUploadSize = 100
