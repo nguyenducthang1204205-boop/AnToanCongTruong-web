@@ -47,30 +47,6 @@ SO_ANH = {"Huấn luyện": 5758, "Kiểm định": 1584, "Kiểm tra": 858}
 CAU_HINH_HUAN_LUYEN = {"Mô hình gốc": "YOLOv11n (COCO)", "Dữ liệu": "Roboflow v2", "Số epoch": "50",
                        "Kích thước ảnh": "640 px", "Batch": "16", "Tốc độ học ban đầu": "0,01", "GPU": "RTX 3050 6 GB"}
 
-# Mô hình phiên bản 1 (train 5667 ảnh, trước khi thêm 91 ảnh tự gán nhãn), chấm lại bằng model.val trên đúng
-# tập val / test hiện tại để so sánh công bằng với DANH_GIA (phiên bản 2).
-PHIEN_BAN = {"v1": "Mô hình cũ (v1)", "v2": "Mô hình mới (v2)"}
-SO_ANH_THEM = 91
-DANH_GIA_V1 = {
-    "val": {"all": (0.843, 0.800, 0.835, 0.467), "lop": {
-        "Gloves": (0.774, 0.693, 0.735, 0.358), "Helmet": (0.932, 0.933, 0.950, 0.580),
-        "Person": (0.896, 0.931, 0.928, 0.638), "Safety Boot": (0.773, 0.679, 0.742, 0.356),
-        "Safety Vest": (0.848, 0.889, 0.912, 0.586), "bare-arms": (0.833, 0.752, 0.795, 0.338),
-        "no-boot": (0.853, 0.763, 0.796, 0.545), "no-helmet": (0.871, 0.774, 0.828, 0.362),
-        "no-vest": (0.805, 0.785, 0.826, 0.442)}},
-    "test": {"all": (0.820, 0.763, 0.807, 0.436), "lop": {
-        "Gloves": (0.767, 0.672, 0.707, 0.339), "Helmet": (0.939, 0.915, 0.939, 0.547),
-        "Person": (0.924, 0.912, 0.936, 0.627), "Safety Boot": (0.761, 0.678, 0.741, 0.344),
-        "Safety Vest": (0.874, 0.893, 0.917, 0.565), "bare-arms": (0.794, 0.669, 0.717, 0.295),
-        "no-boot": (0.749, 0.625, 0.735, 0.437), "no-helmet": (0.760, 0.676, 0.713, 0.312),
-        "no-vest": (0.816, 0.831, 0.857, 0.459)}},
-}
-# Kết luận tuân thủ của hệ thống (phan_tich_khung_hinh của notebook) trên 858 ảnh test, đối chiếu với kết luận rút ra
-# từ nhãn thật: 1895 công nhân, 1700 người thật sự vi phạm, 195 người đạt chuẩn.
-HE_THONG = {"so_anh": 858, "vi_pham": 1700, "dat_chuan": 195,
-            "v1": {"bat_duoc": 1508, "bao_nham": 61, "anh_dung": 811},
-            "v2": {"bat_duoc": 1521, "bao_nham": 63, "anh_dung": 812}}
-
 AN_TRUC = alt.Axis(grid=False, ticks=False, domain=False, labelPadding=6, labelLimit=240)
 
 
@@ -126,49 +102,6 @@ def bd_theo_lop(chi_so):
                     tooltip=[alt.Tooltip("Lớp:N"), alt.Tooltip("Lớp gốc:N"), alt.Tooltip("Nhóm:N"), alt.Tooltip("Tập:N"),
                              alt.Tooltip("hien_thi:N", title=chi_so)])
             .properties(height=440))
-
-
-def bang_so_sanh_phien_ban(tap):
-    """Chỉ số từng lớp của hai phiên bản mô hình và mức chênh (điểm %), dùng cho biểu đồ và bảng."""
-    rows = []
-    for lop, moi in DANH_GIA[tap]["lop"].items():
-        cu = DANH_GIA_V1[tap]["lop"][lop]
-        rows.append({"Lớp": nhan_lop(lop), "Bắt buộc": "✔" if lop in BAT_BUOC else "",
-                     **{f"{cs} v1": cu[i] for i, cs in enumerate(CHI_SO)},
-                     **{f"{cs} v2": moi[i] for i, cs in enumerate(CHI_SO)}})
-    return pd.DataFrame(rows)
-
-
-def bd_so_sanh_phien_ban(tap, chi_so):
-    """Biểu đồ quả tạ: mỗi lớp một hàng, chấm v1 và v2 nối bằng một vạch. Trục x không bắt đầu từ 0 vì mức chênh
-    chỉ vài điểm; xếp theo mức chênh, lớp tăng nhiều nhất ở trên cùng."""
-    i = CHI_SO.index(chi_so)
-    rows = []
-    for lop, moi in DANH_GIA[tap]["lop"].items():
-        cu = DANH_GIA_V1[tap]["lop"][lop]
-        chung = {"Lớp": TEN_LOP[lop], "Lớp gốc": lop, "v1": cu[i], "v2": moi[i], "Chênh": (moi[i] - cu[i]) * 100}
-        rows += [{**chung, "Phiên bản": PHIEN_BAN[pb], "Giá trị": v} for pb, v in (("v1", cu[i]), ("v2", moi[i]))]
-    df = pd.DataFrame(rows)
-    thu_tu = df.drop_duplicates("Lớp").sort_values("Chênh", ascending=False)["Lớp"].tolist()
-    goc = alt.Chart(df).transform_calculate(
-        hien_v1=PHAN_TRAM_VN("v1"), hien_v2=PHAN_TRAM_VN("v2"),
-        hien_chenh="(datum['Chênh'] >= 0 ? '+' : '') + replace(format(datum['Chênh'], '.1f'), '.', ',') + ' điểm'")
-    y = alt.Y("Lớp:N", sort=thu_tu, title=None, axis=AN_TRUC)
-    tooltip = [alt.Tooltip("Lớp:N"), alt.Tooltip("Lớp gốc:N"), alt.Tooltip("hien_v1:N", title=PHIEN_BAN["v1"]),
-               alt.Tooltip("hien_v2:N", title=PHIEN_BAN["v2"]), alt.Tooltip("hien_chenh:N", title="Chênh lệch")]
-    vach = goc.transform_filter(alt.datum["Phiên bản"] == PHIEN_BAN["v1"]).mark_rule(
-        strokeWidth=2, color="#94a3b8").encode(y=y, x=alt.X("v1:Q"), x2="v2:Q", tooltip=tooltip)
-    cham = goc.mark_circle(size=110, opacity=1, stroke="white", strokeWidth=2).encode(
-        y=y, x=alt.X("Giá trị:Q", title=chi_so, scale=alt.Scale(zero=False, padding=12),
-                     axis=alt.Axis(format="%", tickCount=6)),
-        # chú thích xếp dọc, nếu không trên điện thoại nhãn thứ hai bị cắt
-        color=alt.Color("Phiên bản:N", scale=alt.Scale(domain=list(PHIEN_BAN.values())),
-                        legend=alt.Legend(orient="top", title=None, columns=1)),
-        tooltip=tooltip)
-    chu = goc.transform_filter(alt.datum["Phiên bản"] == PHIEN_BAN["v2"]).transform_calculate(
-        ben_phai="max(datum['v1'], datum['v2'])").mark_text(align="left", dx=10, fontSize=11).encode(
-        y=y, x="ben_phai:Q", text="hien_chenh:N", color=alt.value("#64748b"))
-    return (vach + cham + chu).properties(height=380, padding={"right": 70, "left": 4, "top": 4, "bottom": 4})
 
 
 def bd_nhiet(tap):

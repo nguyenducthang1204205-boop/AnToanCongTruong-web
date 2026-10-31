@@ -1053,8 +1053,7 @@ def trang_mo_hinh():
     df = bd.doc_ket_qua_huan_luyen()
     test = bd.DANH_GIA["test"]
     hero("Đánh giá mô hình · YOLOv11n", "Hiệu năng mô hình",
-         f"Mô hình phiên bản 2: huấn luyện lại 50 epoch sau khi thêm {bd.SO_ANH_THEM} ảnh tự gán nhãn, đánh giá "
-         "trên hai tập dữ liệu chưa dùng để huấn luyện: tập kiểm định (val) và tập kiểm tra (test).",
+         "YOLOv11n tinh chỉnh 50 epoch trên bộ dữ liệu PPE, đánh giá trên hai tập dữ liệu chưa dùng để huấn luyện: tập kiểm định (val) và tập kiểm tra (test).",
          [(bd.phan_tram(test["all"][2]), "mAP50 trên tập kiểm tra"),
           (bd.phan_tram(test["all"][3]), "mAP50-95 trên tập kiểm tra"),
           (f"{round(df['time'].iloc[-1] / 60)} phút", "thời gian huấn luyện"),
@@ -1074,40 +1073,17 @@ def trang_mo_hinh():
     st.caption(f"{so_vn(so['anh'])} ảnh, {so_vn(so['doi_tuong'])} đối tượng gắn nhãn · tốc độ suy luận "
                f"{str(so['toc_do_ms']).replace('.', ',')} ms/ảnh trên RTX 3050.")
 
-    # --- so với phiên bản trước
-    muc("Phiên bản", "Mô hình mới so với mô hình cũ",
-        f"Phiên bản 2 được huấn luyện lại từ đầu sau khi thêm {bd.SO_ANH_THEM} ảnh tự gán nhãn vào tập huấn luyện "
-        f"({so_vn(bd.SO_ANH['Huấn luyện'] - bd.SO_ANH_THEM)} → {so_vn(bd.SO_ANH['Huấn luyện'])} ảnh). "
-        "Cả hai phiên bản được chấm trên cùng tập kiểm định và kiểm tra.")
-    ht = bd.HE_THONG
-    v1, v2 = ht["v1"], ht["v2"]
-    with st.container(horizontal=True, gap="small"):
-        for ten, a, b, mau, giai_thich in [
-            (f"mAP50 ({bd.TEN_TAP[tap].split(' (')[0].lower()})", bd.DANH_GIA_V1[tap]["all"][2], so["all"][2],
-             "normal", "Chỉ số nhận diện tổng của 9 lớp trên tập đang chọn."),
-            ("Người vi phạm bắt được", v1["bat_duoc"] / ht["vi_pham"], v2["bat_duoc"] / ht["vi_pham"], "normal",
-             f"Trong {so_vn(ht['vi_pham'])} công nhân thật sự thiếu đồ bảo hộ trên tập kiểm tra."),
-            ("Người đạt chuẩn bị báo nhầm", v1["bao_nham"] / ht["dat_chuan"], v2["bao_nham"] / ht["dat_chuan"],
-             "inverse", f"Trong {ht['dat_chuan']} công nhân thật sự đủ 4 trang bị. Càng thấp càng tốt."),
-            ("Ảnh kết luận đúng", v1["anh_dung"] / ht["so_anh"], v2["anh_dung"] / ht["so_anh"], "normal",
-             f"Có / không cảnh báo, trên {ht['so_anh']} ảnh kiểm tra."),
-        ]:
-            st.metric(ten, bd.phan_tram(b), delta=f"{(b - a) * 100:+.1f} điểm so với v1".replace(".", ","),
-                      delta_color=mau, help=giai_thich, border=True, width="stretch")
-    st.caption("Ba ô cuối đo kết luận đủ / thiếu trang bị của từng công nhân (logic của hệ thống) trên tập kiểm "
-               "tra, đối chiếu với kết luận rút ra từ nhãn thật.")
-    chi_so_pb = st.pills("Chỉ số", list(bd.CHI_SO), default="mAP50", required=True, key="chi_so_phien_ban")
-    nhan_xet(f"Mức thay đổi nhỏ: {bd.SO_ANH_THEM} ảnh chỉ tăng khoảng "
-             f"{bd.phan_tram(bd.SO_ANH_THEM / (bd.SO_ANH['Huấn luyện'] - bd.SO_ANH_THEM))} dữ liệu huấn luyện, và hai "
-             "lần huấn luyện trên cùng dữ liệu vốn đã lệch nhau khoảng ±0,5 điểm mAP. Rõ nhất là hai lớp vi phạm trên "
-             "tập kiểm tra: <b>Không giày</b> (+6,0 điểm mAP50) và <b>Không mũ</b> (+3,8 điểm). Ảnh mới đều nằm trong "
-             "tập huấn luyện nên các số này chưa đo được mức cải thiện trên chính loại ảnh của nhóm.")
-    with st.container(border=True):
-        bieu_do(bd.bd_so_sanh_phien_ban(tap, chi_so_pb))
-    with st.expander("Xem bảng so sánh theo lớp", icon=":material/table_view:"):
-        bang = bd.bang_so_sanh_phien_ban(tap)
-        st.dataframe(bang.style.format({c: "{:.3f}" for c in bang.columns if c.endswith(("v1", "v2"))}),
-                     hide_index=True, width="stretch")
+    # --- biểu đồ gốc
+    muc("Ultralytics", "Biểu đồ đánh giá gốc",
+        f"Do Ultralytics tạo ra khi chạy <code>model.val()</code> trên tập {bd.TEN_TAP[tap].lower()}.")
+    tabs = st.tabs([ten for ten, _ in ANH_ULTRALYTICS.values()] + ["Kết quả huấn luyện"])
+    for t, (tep, (_, giai_thich)) in zip(tabs, ANH_ULTRALYTICS.items()):
+        with t:
+            st.caption(giai_thich)
+            st.image(str(bd.THU_MUC / tap / tep), width="stretch")
+    with tabs[-1]:
+        st.caption("Tổng hợp loss và chỉ số theo epoch do Ultralytics vẽ (results.png).")
+        st.image(str(bd.THU_MUC / "results.png"), width="stretch")
 
     # --- theo từng lớp
     muc("Theo từng lớp", "Hiệu năng của 9 lớp đối tượng",
@@ -1157,18 +1133,6 @@ def trang_mo_hinh():
                               (f"mAP50 cao nhất (epoch {int(tot_nhat['epoch'])})",
                                bd.phan_tram(tot_nhat["metrics/mAP50(B)"]))]:
             st.metric(nhan, gia_tri, border=True, width="stretch")
-
-    # --- biểu đồ gốc
-    muc("Ultralytics", "Biểu đồ đánh giá gốc",
-        f"Do Ultralytics tạo ra khi chạy <code>model.val()</code> trên tập {bd.TEN_TAP[tap].lower()}.")
-    tabs = st.tabs([ten for ten, _ in ANH_ULTRALYTICS.values()] + ["Kết quả huấn luyện"])
-    for t, (tep, (_, giai_thich)) in zip(tabs, ANH_ULTRALYTICS.items()):
-        with t:
-            st.caption(giai_thich)
-            st.image(str(bd.THU_MUC / tap / tep), width="stretch")
-    with tabs[-1]:
-        st.caption("Tổng hợp loss và chỉ số theo epoch do Ultralytics vẽ (results.png).")
-        st.image(str(bd.THU_MUC / "results.png"), width="stretch")
     chan_trang()
 
 
