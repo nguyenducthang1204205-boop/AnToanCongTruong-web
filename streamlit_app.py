@@ -680,7 +680,7 @@ CAMERA_TU_CHUP_HTML = """
 <div class="trang-thai">Đang xin quyền dùng camera…</div>
 """
 CAMERA_TU_CHUP_CSS = """
-.khung {border-radius: 10px; overflow: hidden; background: #0b1220; line-height: 0}
+.khung {border-radius: 10px; overflow: hidden; background: #e2e8f0; line-height: 0}
 video {width: 100%; max-height: 360px; object-fit: contain}
 .trang-thai {font-size: .85rem; opacity: .75; margin-top: 6px}
 """
@@ -758,30 +758,30 @@ CSS = """
 <style>
   .block-container {padding-top: 4.5rem; max-width: 1320px}
   [data-testid="stImageCaption"] {font-size: .85rem}
-  /* Phần đầu trang: khung tối cố định ở cả hai giao diện, sọc xanh nước biển/đen như băng rào công trường */
+  /* Phần đầu trang: nền sáng xanh nhạt, chữ tối, sọc xanh nước biển/trắng như băng rào công trường */
   .hero {position: relative; overflow: hidden; display: flex; gap: 32px; justify-content: space-between;
-         padding: 30px 32px 26px; margin-bottom: 1.4rem; border-radius: 18px; color: #f8fafc;
-         border: 1px solid rgba(148, 163, 184, .18);
-         background: radial-gradient(640px 260px at 100% 0%, rgba(14, 165, 233, .32), transparent 70%),
-                     linear-gradient(135deg, #0b1220 0%, #111c33 55%, #1b2740 100%)}
+         padding: 30px 32px 26px; margin-bottom: 1.4rem; border-radius: 18px; color: #0f172a;
+         border: 1px solid rgba(2, 132, 199, .22); box-shadow: 0 12px 32px -18px rgba(3, 105, 161, .35);
+         background: radial-gradient(640px 260px at 100% 0%, rgba(14, 165, 233, .20), transparent 70%),
+                     linear-gradient(135deg, #ffffff 0%, #f0f9ff 55%, #e0f2fe 100%)}
   .hero::before {content: ""; position: absolute; inset: 0 0 auto 0; height: 6px;
-                 background: repeating-linear-gradient(135deg, #0ea5e9 0 14px, #0b1220 14px 28px)}
+                 background: repeating-linear-gradient(135deg, #0284c7 0 14px, #e0f2fe 14px 28px)}
   .hero .trai {display: flex; gap: 18px; align-items: flex-start; min-width: 0}
   .hero .logo {flex: none; display: grid; place-items: center; width: 58px; height: 58px; border-radius: 16px;
                background: linear-gradient(160deg, #0ea5e9, #0369a1); color: #fff;
-               box-shadow: 0 10px 30px -8px rgba(14, 165, 233, .6)}
-  .hero .nho {font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #7dd3fc}
-  .hero h1 {color: #fff; font-size: 1.9rem; line-height: 1.2; margin: .3rem 0 .45rem; padding: 0; text-wrap: balance}
-  .hero p {color: #cbd5e1; max-width: 600px; margin: 0 0 .9rem; font-size: .98rem}
+               box-shadow: 0 10px 24px -8px rgba(3, 105, 161, .5)}
+  .hero .nho {font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #0369a1}
+  .hero h1 {color: #0c4a6e; font-size: 1.9rem; line-height: 1.2; margin: .3rem 0 .45rem; padding: 0; text-wrap: balance}
+  .hero p {color: #334155; max-width: 600px; margin: 0 0 .9rem; font-size: .98rem}
   .hero .the-ppe {display: inline-flex; align-items: center; gap: 6px; margin: 0 6px 6px 0; padding: 3px 11px;
-                  border-radius: 999px; border: 1px solid rgba(148, 163, 184, .35); color: #e2e8f0;
-                  background: rgba(15, 23, 42, .45); font-size: .8rem; font-weight: 500}
-  .hero .the-ppe::before {content: ""; width: 6px; height: 6px; border-radius: 50%; background: #38bdf8}
+                  border-radius: 999px; border: 1px solid rgba(2, 132, 199, .30); color: #0f172a;
+                  background: rgba(255, 255, 255, .75); font-size: .8rem; font-weight: 500}
+  .hero .the-ppe::before {content: ""; width: 6px; height: 6px; border-radius: 50%; background: #0284c7}
   .hero .so {flex: none; display: grid; grid-template-columns: repeat(2, 148px); gap: 12px; align-self: center}
-  .hero .o {padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, .04);
-            border: 1px solid rgba(148, 163, 184, .18)}
-  .hero .gia-tri {font-size: 1.55rem; font-weight: 700; color: #fff; line-height: 1.2; font-variant-numeric: tabular-nums}
-  .hero .nhan {font-size: .78rem; color: #94a3b8; margin-top: 2px}
+  .hero .o {padding: 12px 16px; border-radius: 12px; background: #ffffff;
+            border: 1px solid rgba(2, 132, 199, .18)}
+  .hero .gia-tri {font-size: 1.55rem; font-weight: 700; color: #0369a1; line-height: 1.2; font-variant-numeric: tabular-nums}
+  .hero .nhan {font-size: .78rem; color: #475569; margin-top: 2px}
   /* Tiêu đề mục: dòng chữ nhỏ viết hoa + tiêu đề + mô tả */
   .muc {margin: .6rem 0 .5rem}
   .muc .nho {font-size: .72rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; opacity: .6}
