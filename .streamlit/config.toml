@@ -1,4 +1,4 @@
-# Giao diện: xám công nghiệp + cam an toàn, font Be Vietnam Pro (hiển thị đủ dấu tiếng Việt).
+# Giao diện: xám công nghiệp + xanh nước biển, font Be Vietnam Pro (hiển thị đủ dấu tiếng Việt).
 # Người xem tự chọn sáng / tối trong menu Settings; mặc định theo hệ điều hành.
 [theme]
 font = "Be Vietnam Pro:https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap"
@@ -10,12 +10,12 @@ headingFontWeights = [700, 700, 600, 600, 600, 600]
 headingFontSizes = ["1.75rem", "1.5rem", "1.3rem"]
 
 [theme.light]
-primaryColor = "#C2410C"
+primaryColor = "#0369A1"
 backgroundColor = "#F8FAFC"
 secondaryBackgroundColor = "#EEF2F6"
 textColor = "#0F172A"
 borderColor = "#D5DCE5"
-linkColor = "#C2410C"
+linkColor = "#0369A1"
 redColor = "#DC2626"
 greenColor = "#15803D"
 dataframeHeaderBackgroundColor = "#EEF2F6"
@@ -27,12 +27,12 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F1F5F9"
 
 [theme.dark]
-primaryColor = "#EA580C"
+primaryColor = "#0284C7"
 backgroundColor = "#0B1220"
 secondaryBackgroundColor = "#172235"
 textColor = "#E2E8F0"
 borderColor = "#2A3A52"
-linkColor = "#FB923C"
+linkColor = "#38BDF8"
 redColor = "#F87171"
 greenColor = "#4ADE80"
 dataframeHeaderBackgroundColor = "#172235"

@@ -327,25 +327,76 @@ def thoi_luong_video(file_id, duoi, _du_lieu):
         shutil.rmtree(thu_muc, ignore_errors=True)
 
 
-# Phát các video cùng lúc: tìm thẻ <video> trong từng container (class st-key-…) và nối các sự kiện phát / dừng /
-# tua / đổi tốc độ của mỗi video sang mọi video còn lại. Component v2 chạy ngay trong trang (không nằm trong iframe)
-# nên truy cập được các st.video. Video đầu tiên (video gốc) làm mốc: khi đang phát mà video nào lệch quá 0,3 giây
-# thì kéo video đó về khớp.
+# Phát các video cùng lúc: tìm thẻ <video> trong từng container (class st-key-…) và khi người xem phát / dừng / tua /
+# đổi tốc độ ở một video thì làm y như vậy với các video còn lại. Component v2 chạy ngay trong trang (không nằm trong
+# iframe) nên truy cập được các st.video.
+# - Mỗi lần đoạn mã này tự phát / dừng / tua / đổi tốc độ một video, nó ghi lại đúng sự kiện sẽ phát sinh trên video
+#   đó (hạn 1 giây) và bỏ qua đúng sự kiện ấy. Nếu không, với 4 video các lệnh dội qua lại và chúng tua nhau mãi.
+#   Không dùng "bỏ qua mọi sự kiện trong một khoảng thời gian": khi mạng chậm video so sánh liên tục được chỉnh lệch
+#   nên gần như lúc nào cũng bị bỏ qua, và cú bấm thật của người xem trên video đó bị nuốt mất.
+# - Video gốc có tiếng nên trình duyệt có thể chặn play() không đến từ cú bấm trực tiếp: khi đó tắt tiếng rồi phát.
+# - Cứ 0,5 giây lấy video gốc làm mốc: video nào khác trạng thái phát / dừng, tốc độ, hoặc lệch quá 0,4 giây thì kéo
+#   về khớp (bỏ qua video đang tua để không giật).
 DONG_BO_VIDEO_JS = """
 export default function(component) {
     const lop = component.data.lop;
     let ds = [], huy = null;
+    const cho = new WeakMap();  // video -> {loại sự kiện: [hạn, …]} do chính đoạn mã này gây ra
+    const doiSuKien = (v, loai) => {
+        const m = cho.get(v) || {};
+        (m[loai] = m[loai] || []).push(performance.now() + 1000);
+        cho.set(v, m);
+    };
+    const laDoMinh = (v, loai) => {
+        const han = (cho.get(v) || {})[loai] || [];
+        while (han.length && han[0] < performance.now()) han.shift();
+        return han.length > 0 && han.shift() > 0;
+    };
+    const phat = v => {
+        if (!v.paused) return;
+        doiSuKien(v, 'play');
+        v.play().catch(e => {
+            if (e.name !== 'NotAllowedError' || v.muted) return;
+            laDoMinh(v, 'play');  // bị chặn thì không có sự kiện play
+            v.muted = true;
+            doiSuKien(v, 'play');
+            v.play().catch(() => {});
+        });
+    };
+    const dung = v => { if (!v.paused) { doiSuKien(v, 'pause'); v.pause(); } };
+    const khopThoiGian = (nguon, v, nguong = 0.1) => {
+        if (Math.abs(v.currentTime - nguon.currentTime) > nguong) {
+            doiSuKien(v, 'seeking');
+            v.currentTime = nguon.currentTime;
+        }
+    };
+    const khopTocDo = (nguon, v) => {
+        if (v.playbackRate !== nguon.playbackRate) {
+            doiSuKien(v, 'ratechange');
+            v.playbackRate = nguon.playbackRate;
+        }
+    };
 
-    const noi = (nguon, dich, signal) => {
-        const khop = () => {
-            if (Math.abs(dich.currentTime - nguon.currentTime) > 0.1) dich.currentTime = nguon.currentTime;
-        };
-        nguon.addEventListener('play', () => { khop(); if (dich.paused) dich.play().catch(() => {}); }, { signal });
-        nguon.addEventListener('pause', () => { if (!dich.paused && !nguon.ended) dich.pause(); }, { signal });
-        nguon.addEventListener('seeking', khop, { signal });
-        nguon.addEventListener('ratechange', () => {
-            if (dich.playbackRate !== nguon.playbackRate) dich.playbackRate = nguon.playbackRate;
+    const noi = (nguon, signal) => {
+        const nghe = (loai, viec) => nguon.addEventListener(loai, () => {
+            if (laDoMinh(nguon, loai)) return;
+            for (const v of ds) if (v !== nguon) viec(v);
         }, { signal });
+        nghe('play', v => { khopThoiGian(nguon, v); phat(v); });
+        nghe('pause', v => { if (!nguon.ended) { dung(v); khopThoiGian(nguon, v); } });
+        nghe('seeking', v => khopThoiGian(nguon, v));
+        nghe('ratechange', v => khopTocDo(nguon, v));
+    };
+
+    const giuKhop = () => {
+        const goc = ds[0];
+        if (goc.seeking || goc.ended) return;
+        for (const v of ds.slice(1)) {
+            if (v.seeking || v.ended) continue;
+            if (goc.paused) dung(v); else phat(v);
+            khopThoiGian(goc, v, goc.paused ? 0.05 : 0.4);
+            khopTocDo(goc, v);
+        }
     };
 
     const kiemTra = () => {
@@ -355,11 +406,9 @@ export default function(component) {
             if (huy) huy.abort();
             huy = new AbortController();
             ds = moi;
-            for (const a of ds) for (const b of ds) if (a !== b) noi(a, b, huy.signal);
-        } else if (!ds[0].paused) {
-            for (const v of ds.slice(1)) {
-                if (!v.paused && Math.abs(ds[0].currentTime - v.currentTime) > 0.3) v.currentTime = ds[0].currentTime;
-            }
+            for (const v of ds) { v.preload = 'auto'; noi(v, huy.signal); }
+        } else {
+            giuKhop();
         }
     };
     kiemTra();
@@ -709,25 +758,25 @@ CSS = """
 <style>
   .block-container {padding-top: 4.5rem; max-width: 1320px}
   [data-testid="stImageCaption"] {font-size: .85rem}
-  /* Phần đầu trang: khung tối cố định ở cả hai giao diện, sọc cảnh báo cam/đen như băng rào công trường */
+  /* Phần đầu trang: khung tối cố định ở cả hai giao diện, sọc xanh nước biển/đen như băng rào công trường */
   .hero {position: relative; overflow: hidden; display: flex; gap: 32px; justify-content: space-between;
          padding: 30px 32px 26px; margin-bottom: 1.4rem; border-radius: 18px; color: #f8fafc;
          border: 1px solid rgba(148, 163, 184, .18);
-         background: radial-gradient(640px 260px at 100% 0%, rgba(234, 88, 12, .32), transparent 70%),
+         background: radial-gradient(640px 260px at 100% 0%, rgba(14, 165, 233, .32), transparent 70%),
                      linear-gradient(135deg, #0b1220 0%, #111c33 55%, #1b2740 100%)}
   .hero::before {content: ""; position: absolute; inset: 0 0 auto 0; height: 6px;
-                 background: repeating-linear-gradient(135deg, #ea580c 0 14px, #0b1220 14px 28px)}
+                 background: repeating-linear-gradient(135deg, #0ea5e9 0 14px, #0b1220 14px 28px)}
   .hero .trai {display: flex; gap: 18px; align-items: flex-start; min-width: 0}
   .hero .logo {flex: none; display: grid; place-items: center; width: 58px; height: 58px; border-radius: 16px;
-               background: linear-gradient(160deg, #f97316, #c2410c); color: #fff;
-               box-shadow: 0 10px 30px -8px rgba(234, 88, 12, .6)}
-  .hero .nho {font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #fdba74}
+               background: linear-gradient(160deg, #0ea5e9, #0369a1); color: #fff;
+               box-shadow: 0 10px 30px -8px rgba(14, 165, 233, .6)}
+  .hero .nho {font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: #7dd3fc}
   .hero h1 {color: #fff; font-size: 1.9rem; line-height: 1.2; margin: .3rem 0 .45rem; padding: 0; text-wrap: balance}
   .hero p {color: #cbd5e1; max-width: 600px; margin: 0 0 .9rem; font-size: .98rem}
   .hero .the-ppe {display: inline-flex; align-items: center; gap: 6px; margin: 0 6px 6px 0; padding: 3px 11px;
                   border-radius: 999px; border: 1px solid rgba(148, 163, 184, .35); color: #e2e8f0;
                   background: rgba(15, 23, 42, .45); font-size: .8rem; font-weight: 500}
-  .hero .the-ppe::before {content: ""; width: 6px; height: 6px; border-radius: 50%; background: #f97316}
+  .hero .the-ppe::before {content: ""; width: 6px; height: 6px; border-radius: 50%; background: #38bdf8}
   .hero .so {flex: none; display: grid; grid-template-columns: repeat(2, 148px); gap: 12px; align-self: center}
   .hero .o {padding: 12px 16px; border-radius: 12px; background: rgba(255, 255, 255, .04);
             border: 1px solid rgba(148, 163, 184, .18)}
@@ -738,8 +787,8 @@ CSS = """
   .muc .nho {font-size: .72rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; opacity: .6}
   .muc h3 {font-size: 1.25rem; margin: .15rem 0 .1rem; padding: 0}
   .muc p {margin: 0; opacity: .72; font-size: .92rem}
-  .nhan-xet {padding: 12px 16px; border-radius: 12px; border-left: 4px solid #ea580c;
-             background: rgba(234, 88, 12, .08); font-size: .93rem; margin: .4rem 0 .2rem}
+  .nhan-xet {padding: 12px 16px; border-radius: 12px; border-left: 4px solid #0284c7;
+             background: rgba(2, 132, 199, .08); font-size: .93rem; margin: .4rem 0 .2rem}
   .trang-thai {display: flex; align-items: center; gap: 14px; color: #fff; border-radius: 12px;
                padding: 12px 16px; margin-bottom: .25rem}
   .trang-thai svg {flex: none}
